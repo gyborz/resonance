@@ -4,13 +4,45 @@
 	classes = {};
 	objectVersion = 77;
 	objects = {
+		0CF29761B64A5A41925A83CA /* PBXBuildFile */ = {
+			isa = "PBXBuildFile";
+			productRef = "F14E5B6C8303557E8824BAD5";
+		};
+		3BF3F3E20AA451D9A2FF0375 /* PBXBuildFile */ = {
+			isa = "PBXBuildFile";
+			productRef = "0AA44425C9415086BE36918D";
+		};
+		5874E983290853A7874690A8 /* PBXBuildFile */ = {
+			isa = "PBXBuildFile";
+			productRef = "7F71DB0B84BF5D3E924AA16D";
+		};
 		62ED86BDED9B56E2BC3AE3E9 /* PBXBuildFile */ = {
 			isa = "PBXBuildFile";
 			productRef = "ACCDA6D0C82954C89FA74F57";
 		};
+		89F2F3F1CC14592C9EF3452E /* PBXBuildFile */ = {
+			isa = "PBXBuildFile";
+			productRef = "2AAEAFFB877052238FC9BD8A";
+		};
+		950A387265A15EB5A2A6FD44 /* PBXBuildFile */ = {
+			isa = "PBXBuildFile";
+			productRef = "421CFC4011155C3A9700DA77";
+		};
+		BDE101C012A95670BB471209 /* PBXBuildFile */ = {
+			isa = "PBXBuildFile";
+			productRef = "A142A9846818550A81480BFD";
+		};
 		CA38F3D629C55DF285797B5B /* PBXBuildFile */ = {
 			isa = "PBXBuildFile";
 			productRef = "321479685B2250E28C810845";
+		};
+		D232BB7B35E8516BBC940C3D /* PBXBuildFile */ = {
+			isa = "PBXBuildFile";
+			productRef = "0E9E54B60AAD57A6A3C19C2D";
+		};
+		FB08935C45B8539EB1CD73ED /* PBXBuildFile */ = {
+			isa = "PBXBuildFile";
+			productRef = "493C8FEC0D4250D0A8E327B9";
 		};
 		327DDE433668549A85EE6C2D /* PBXContainerItemProxy */ = {
 			isa = "PBXContainerItemProxy";
@@ -109,6 +141,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				"62ED86BDED9B56E2BC3AE3E9",
+				"3BF3F3E20AA451D9A2FF0375",
+				"0CF29761B64A5A41925A83CA",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -117,6 +151,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				"CA38F3D629C55DF285797B5B",
+				"89F2F3F1CC14592C9EF3452E",
+				"950A387265A15EB5A2A6FD44",
+				"FB08935C45B8539EB1CD73ED",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -124,6 +161,9 @@
 			isa = "PBXFrameworksBuildPhase";
 			buildActionMask = 2147483647;
 			files = (
+				"D232BB7B35E8516BBC940C3D",
+				"5874E983290853A7874690A8",
+				"BDE101C012A95670BB471209",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -185,6 +225,9 @@
 				"FAC38CA0550F52AA819CFADD",
 			);
 			packageProductDependencies = (
+				"0E9E54B60AAD57A6A3C19C2D",
+				"7F71DB0B84BF5D3E924AA16D",
+				"A142A9846818550A81480BFD",
 			);
 		};
 		510890EA2B3F5AD7A73FFC37 /* Resonance */ = {
@@ -211,6 +254,8 @@
 			);
 			packageProductDependencies = (
 				"ACCDA6D0C82954C89FA74F57",
+				"0AA44425C9415086BE36918D",
+				"F14E5B6C8303557E8824BAD5",
 			);
 		};
 		8CCEE5C0B5885D1EA6205902 /* ResonanceTests */ = {
@@ -235,6 +280,9 @@
 			);
 			packageProductDependencies = (
 				"321479685B2250E28C810845",
+				"2AAEAFFB877052238FC9BD8A",
+				"421CFC4011155C3A9700DA77",
+				"493C8FEC0D4250D0A8E327B9",
 			);
 		};
 		3DCF24125C245833BB8B7D3C /* PBXProject */ = {
@@ -485,13 +533,45 @@
 			isa = "XCLocalSwiftPackageReference";
 			relativePath = "Packages/ResonanceKit";
 		};
+		0AA44425C9415086BE36918D /* XCSwiftPackageProductDependency */ = {
+			isa = "XCSwiftPackageProductDependency";
+			productName = "SystemAudioCapture";
+		};
+		0E9E54B60AAD57A6A3C19C2D /* XCSwiftPackageProductDependency */ = {
+			isa = "XCSwiftPackageProductDependency";
+			productName = "ShazamFixtureSupport";
+		};
+		2AAEAFFB877052238FC9BD8A /* XCSwiftPackageProductDependency */ = {
+			isa = "XCSwiftPackageProductDependency";
+			productName = "ShazamFixtureSupport";
+		};
 		321479685B2250E28C810845 /* XCSwiftPackageProductDependency */ = {
 			isa = "XCSwiftPackageProductDependency";
 			productName = "RecognitionTestSupport";
 		};
+		421CFC4011155C3A9700DA77 /* XCSwiftPackageProductDependency */ = {
+			isa = "XCSwiftPackageProductDependency";
+			productName = "SystemAudioCapture";
+		};
+		493C8FEC0D4250D0A8E327B9 /* XCSwiftPackageProductDependency */ = {
+			isa = "XCSwiftPackageProductDependency";
+			productName = "ShazamRecognition";
+		};
+		7F71DB0B84BF5D3E924AA16D /* XCSwiftPackageProductDependency */ = {
+			isa = "XCSwiftPackageProductDependency";
+			productName = "SystemAudioCapture";
+		};
+		A142A9846818550A81480BFD /* XCSwiftPackageProductDependency */ = {
+			isa = "XCSwiftPackageProductDependency";
+			productName = "ShazamRecognition";
+		};
 		ACCDA6D0C82954C89FA74F57 /* XCSwiftPackageProductDependency */ = {
 			isa = "XCSwiftPackageProductDependency";
 			productName = "RecognitionCore";
+		};
+		F14E5B6C8303557E8824BAD5 /* XCSwiftPackageProductDependency */ = {
+			isa = "XCSwiftPackageProductDependency";
+			productName = "ShazamRecognition";
 		};
 	};
 	rootObject = 3DCF24125C245833BB8B7D3C;

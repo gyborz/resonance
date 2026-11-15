@@ -11,7 +11,13 @@
       "containerPath": "container:Resonance.xcodeproj",
       "identifier": "510890EA2B3F5AD7A73FFC37",
       "name": "Resonance"
-    }
+    },
+    "environmentVariableEntries": [
+      {
+        "key": "RESONANCE_TEST_HOST",
+        "value": "1"
+      }
+    ]
   },
   "testTargets": [
     {

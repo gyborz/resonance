@@ -1,0 +1,53 @@
+#!/bin/bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+case "${1:-}" in
+    system)
+        test_case="localCatalogFromSystemAudio"
+        ;;
+    catalog)
+        test_case="defaultCatalogFromSystemAudio"
+        : "${RESONANCE_LIVE_FIXTURE_PATH:?Set to an absolute path to a known audio recording you have permission to play.}"
+        : "${RESONANCE_EXPECTED_TITLE:?Set to the recording title expected from Shazam.}"
+        : "${RESONANCE_EXPECTED_ARTIST:?Set to the artist expected from Shazam.}"
+        if [[ "$RESONANCE_LIVE_FIXTURE_PATH" != /* || ! -r "$RESONANCE_LIVE_FIXTURE_PATH" ]]; then
+            printf 'Set RESONANCE_LIVE_FIXTURE_PATH to a readable absolute path.\n' >&2
+            exit 2
+        fi
+        export TEST_RUNNER_RESONANCE_LIVE_FIXTURE_PATH="$RESONANCE_LIVE_FIXTURE_PATH"
+        export TEST_RUNNER_RESONANCE_EXPECTED_TITLE="$RESONANCE_EXPECTED_TITLE"
+        export TEST_RUNNER_RESONANCE_EXPECTED_ARTIST="$RESONANCE_EXPECTED_ARTIST"
+        ;;
+    *)
+        printf 'Usage: scripts/check-live [system|catalog]\n' >&2
+        exit 2
+        ;;
+esac
+
+if [[ "$#" != 1 ]]; then
+    printf 'Provide exactly one live test mode.\n' >&2
+    exit 2
+fi
+
+if [[ ! -f Resonance/Configuration/Local.xcconfig ]]; then
+    printf 'Configure a signed app host in Resonance/Configuration/Local.xcconfig.\n' >&2
+    exit 1
+fi
+if ! security find-identity -v -p codesigning |
+    awk 'index($0, "Apple Development:") { found=1 } END { exit !found }'; then
+    printf 'Install an Apple Development signing identity before running live tests.\n' >&2
+    exit 1
+fi
+
+lock="${TMPDIR:-/tmp}/resonance-live-tests.lock"
+if ! mkdir "$lock" 2>/dev/null; then
+    printf 'The live test lock is held at %s. Run only one live test job at a time.\n' "$lock" >&2
+    exit 1
+fi
+trap 'rmdir "$lock"' EXIT
+
+xcodebuild -project Resonance.xcodeproj -scheme Resonance -testPlan Live \
+    -destination "platform=macOS,arch=$(uname -m)" -derivedDataPath DerivedData/Live \
+    -parallel-testing-enabled NO -test-timeouts-enabled YES -maximum-test-execution-time-allowance 120 \
+    "-only-testing:ResonanceLiveTests/LiveRecognitionTests/${test_case}()" test

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Owns one capture and matcher at a time, including the time spent releasing them.
 public actor RecognitionCoordinator: RecognitionWorkflow {
@@ -36,6 +37,7 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
     private let clock: any RecognitionClock
     private let makeCapture: @Sendable () -> any AudioCaptureClient
     private let makeRecognizer: @Sendable () -> any RecognitionClient
+    private let recognitionSuspended = Atomic(false)
     private var active: Attempt?
     private var observers: [UUID: AsyncStream<RecognitionSnapshot>.Continuation] = [:]
     private var isShutDown = false
@@ -71,8 +73,14 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
         return stream
     }
 
+    /// Closes admission without waiting for work already on the coordinator actor.
+    public nonisolated func setRecognitionSuspended(_ suspended: Bool) {
+        recognitionSuspended.store(suspended, ordering: .releasing)
+    }
+
     public func recognize() {
-        guard !isShutDown else { return }
+        guard !isShutDown, !Task.isCancelled,
+              !recognitionSuspended.load(ordering: .acquiring) else { return }
         if active != nil {
             if snapshot.state == .cancelled && !snapshot.hasQueuedRetry {
                 publish(.cancelled, hasQueuedRetry: true)
@@ -91,18 +99,17 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
     }
 
     public func cancel() {
-        guard let attempt = active else { return }
         if snapshot.hasQueuedRetry {
             publish(.cancelled)
-        } else {
+        } else if let attempt = active {
             complete(attempt, with: .cancelled)
         }
     }
 
     /// Ends the current attempt after an interruption such as system sleep.
     public func interrupt() async {
-        guard let attempt = active else { return }
         if snapshot.hasQueuedRetry { cancel() }
+        guard let attempt = active else { return }
         complete(attempt, with: .failed(.captureInterrupted))
         await attempt.cleanup?.value
     }
