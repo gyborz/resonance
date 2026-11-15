@@ -25,7 +25,6 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
         var supersededDeadlineWork: Task<Void, Never>?
         var captureStop: Task<Void, Never>?
         var cleanup: Task<Void, Never>?
-        var retryRequested = false
 
         init(capture: any AudioCaptureClient, matcher: any RecognitionClient) {
             self.capture = capture
@@ -74,9 +73,9 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
 
     public func recognize() {
         guard !isShutDown else { return }
-        if let active {
-            if snapshot.state == .cancelled {
-                active.retryRequested = true
+        if active != nil {
+            if snapshot.state == .cancelled && !snapshot.hasQueuedRetry {
+                publish(.cancelled, hasQueuedRetry: true)
             }
             return
         }
@@ -93,14 +92,17 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
 
     public func cancel() {
         guard let attempt = active else { return }
-        attempt.retryRequested = false
-        complete(attempt, with: .cancelled)
+        if snapshot.hasQueuedRetry {
+            publish(.cancelled)
+        } else {
+            complete(attempt, with: .cancelled)
+        }
     }
 
     /// Ends the current attempt after an interruption such as system sleep.
     public func interrupt() async {
         guard let attempt = active else { return }
-        attempt.retryRequested = false
+        if snapshot.hasQueuedRetry { cancel() }
         complete(attempt, with: .failed(.captureInterrupted))
         await attempt.cleanup?.value
     }
@@ -123,12 +125,12 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
         observers.removeValue(forKey: id)
     }
 
-    private func publish(_ state: RecognitionState) {
+    private func publish(_ state: RecognitionState, hasQueuedRetry: Bool = false) {
         var lastTrack = snapshot.lastTrack
         if case .matched(let track) = state {
             lastTrack = track
         }
-        snapshot = RecognitionSnapshot(state: state, lastTrack: lastTrack)
+        snapshot = RecognitionSnapshot(state: state, lastTrack: lastTrack, hasQueuedRetry: hasQueuedRetry)
         for observer in observers.values {
             observer.yield(snapshot)
         }
@@ -405,10 +407,10 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
     }
 
     private func didComplete(_ id: RecognitionAttemptID, with state: RecognitionState?) {
-        guard let attempt = active, attempt.id == id else { return }
+        guard active?.id == id else { return }
         active = nil
         if let state { publish(state) }
-        if attempt.retryRequested { recognize() }
+        if snapshot.hasQueuedRetry { recognize() }
     }
 
     private func fail(
