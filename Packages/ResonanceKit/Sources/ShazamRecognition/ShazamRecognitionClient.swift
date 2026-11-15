@@ -109,16 +109,33 @@ public actor ShazamRecognitionClient: RecognitionClient {
 
         if !consideredEarlyQuery && analyzedFrameCount >= policy.earlyFrameCount {
             consideredEarlyQuery = true
-            requestMatch()
+            if let signature = nextSignature() {
+                requestMatch(for: signature)
+            }
         }
     }
 
     public func finishInput() {
         guard phase == .accepting else { return }
         phase = .inputEnded
-        if pendingQuery == nil {
-            requestFinalMatch()
+
+        guard let signature = nextSignature() else {
+            if pendingQuery == nil { complete(.noMatch(isFinal: true)) }
+            return
         }
+
+        if pendingQuery != nil {
+            // Give the full signature its own session so it can start while the early request is pending.
+            do {
+                let finalSession = try makeSession()
+                session?.invalidate()
+                session = finalSession
+            } catch {
+                complete(.failure(ShazamMetadata.failure(error)))
+                return
+            }
+        }
+        requestMatch(for: signature)
     }
 
     public func stop() {
@@ -134,28 +151,21 @@ public actor ShazamRecognitionClient: RecognitionClient {
         updates = nil
     }
 
-    /// Queries the current snapshot of the growing signature. Only one request can be outstanding.
-    @discardableResult
-    private func requestMatch() -> Bool {
-        guard let policy, let session, let generator,
+    private func nextSignature() -> SHSignature? {
+        guard let policy, let generator,
               analyzedFrameCount > lastQueriedFrameCount,
-              Double(analyzedFrameCount) / PCMFrame.sampleRate >= policy.minimumDuration else { return false }
+              Double(analyzedFrameCount) / PCMFrame.sampleRate >= policy.minimumDuration else { return nil }
         let signature = generator.signature()
-        guard policy.accepts(duration: signature.duration) else { return false }
+        return policy.accepts(duration: signature.duration) ? signature : nil
+    }
 
+    private func requestMatch(for signature: SHSignature) {
+        guard let session else { return }
         let query = UUID()
         lastQueriedFrameCount = analyzedFrameCount
         pendingQuery = query
         session.match(signature) { [weak self] result in
             Task { await self?.receive(result, for: query) }
-        }
-        return true
-    }
-
-    private func requestFinalMatch() {
-        if !requestMatch() {
-            publish(.noMatch(isFinal: true))
-            stop()
         }
     }
 
@@ -164,18 +174,21 @@ public actor ShazamRecognitionClient: RecognitionClient {
         pendingQuery = nil
         switch result {
         case .match(let track):
-            publish(.match(track))
-            stop()
+            complete(.match(track))
         case .failure(let failure):
-            publish(.failure(failure))
-            stop()
+            complete(.failure(failure))
         case .noMatch:
             if phase == .inputEnded {
-                requestFinalMatch()
+                complete(.noMatch(isFinal: true))
             } else {
                 publish(.noMatch(isFinal: false))
             }
         }
+    }
+
+    private func complete(_ event: RecognitionEvent) {
+        publish(event)
+        stop()
     }
 
     private func publish(_ event: RecognitionEvent) {

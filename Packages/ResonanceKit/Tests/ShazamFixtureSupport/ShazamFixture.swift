@@ -17,7 +17,7 @@ public enum ShazamFixture {
     public static let musicURL = URL(string: "https://music.apple.com/us/song/resonance-test-pattern")!
     public static let referenceDuration = 16
 
-    public static func catalogData() throws -> Data {
+    public static func catalogData(leadingMediaItems: [SHMediaItem] = []) throws -> Data {
         let catalog = SHCustomCatalog()
         let generator = SHSignatureGenerator()
         let rate = PCMFrame.sampleRate
@@ -29,7 +29,7 @@ public enum ShazamFixture {
             try generator.append(buffer, at: AVAudioTime(sampleTime: Int64(position), atRate: rate))
         }
         let metadata = SHMediaItem(properties: [.title: title, .artist: artist, .appleMusicURL: musicURL])
-        try catalog.addReferenceSignature(generator.signature(), representing: [metadata])
+        try catalog.addReferenceSignature(generator.signature(), representing: leadingMediaItems + [metadata])
         return catalog.dataRepresentation
     }
 
