@@ -1,0 +1,177 @@
+{
+  "default-configuration": "Release",
+  "configurations": [
+    { "name": "Debug", "file": [ { "name": "Resonance/Configuration" }, "Debug.xcconfig" ] },
+    { "name": "Release", "file": [ { "name": "Resonance/Configuration" }, "Release.xcconfig" ] },
+  ],
+  "localizations": {
+    "development": "en",
+    "supported": [
+      "Base",
+    ],
+  },
+  "packages": [
+    {
+      "kind": "local",
+      "path": "Packages/ResonanceKit",
+    },
+  ],
+  "files": [
+    { "kind": "folder", "path": "Resonance/App", "target-membership": [ "Resonance" ] },
+    { "kind": "folder", "path": "Resonance/Presentation", "target-membership": [ "Resonance" ] },
+    { "kind": "folder", "path": "Resonance/Platform", "target-membership": [ "Resonance" ] },
+    { "kind": "folder", "path": "Resonance/Resources", "target-membership": [ "Resonance" ] },
+    { "kind": "folder", "path": "ResonanceTests", "target-membership": [ "ResonanceTests" ] },
+    { "kind": "folder", "path": "ResonanceLiveTests", "target-membership": [ "ResonanceLiveTests" ] },
+    {
+      "kind": "group",
+      "path": "Resonance/Configuration",
+      "name": "Resonance/Configuration",
+      "children": [
+        { "path": "Shared.xcconfig" },
+        { "path": "Debug.xcconfig" },
+        { "path": "Release.xcconfig" },
+        { "path": "Local.example.xcconfig" },
+        { "path": "Info.plist" },
+      ],
+    }, {
+      "kind": "group",
+      "name": "Products",
+      "children": [
+        { "path": "<PRODUCTS>/Resonance.app", "id": "A9B8B07E7A5157E0B1343828", "type": "wrapper.application" },
+        { "path": "<PRODUCTS>/ResonanceTests.xctest", "id": "F616D9C097F25685A0068F3D", "type": "wrapper.cfbundle" },
+        { "path": "<PRODUCTS>/ResonanceLiveTests.xctest", "id": "B94EA5FC2EAE5FBE824E910E", "type": "wrapper.cfbundle" },
+      ],
+    },
+  ],
+  "targets": [
+    {
+      "name": "Resonance",
+      "id": "510890EA2B3F5AD7A73FFC37",
+      "product": "Products/Resonance.app",
+      "product-type": "application",
+      "build-phases": [
+        "compile-sources",
+        "frameworks",
+        "resources",
+      ],
+      "package-product-members": [
+        {
+          "product-name": "RecognitionCore",
+          "build-phase": { "build-phase": "frameworks" },
+        }, {
+          "product-name": "ShazamRecognition",
+          "build-phase": { "build-phase": "frameworks" },
+        }, {
+          "product-name": "SystemAudioCapture",
+          "build-phase": { "build-phase": "frameworks" },
+        },
+      ],
+      "build-settings": {
+        "CURRENT_PROJECT_VERSION": "1",
+        "GENERATE_INFOPLIST_FILE": "YES",
+        "INFOPLIST_FILE": "Resonance/Configuration/Info.plist",
+        "LD_RUNPATH_SEARCH_PATHS": [
+          "$(inherited)",
+          "@executable_path/../Frameworks",
+          "@loader_path/../Frameworks",
+        ],
+        "MARKETING_VERSION": "0.1.0",
+        "PRODUCT_BUNDLE_IDENTIFIER": "$(RESONANCE_BUNDLE_IDENTIFIER)",
+        "PRODUCT_NAME": "$(TARGET_NAME)",
+      },
+    }, {
+      "name": "ResonanceTests",
+      "id": "8CCEE5C0B5885D1EA6205902",
+      "product": "Products/ResonanceTests.xctest",
+      "product-type": "bundle.unit-test",
+      "dependencies": [
+        "Resonance",
+      ],
+      "build-phases": [
+        "compile-sources",
+        "frameworks",
+        "resources",
+      ],
+      "package-product-members": [
+        {
+          "product-name": "RecognitionTestSupport",
+          "build-phase": { "build-phase": "frameworks" },
+        }, {
+          "product-name": "ShazamFixtureSupport",
+          "build-phase": { "build-phase": "frameworks" },
+        }, {
+          "product-name": "ShazamRecognition",
+          "build-phase": { "build-phase": "frameworks" },
+        }, {
+          "product-name": "SystemAudioCapture",
+          "build-phase": { "build-phase": "frameworks" },
+        },
+      ],
+      "build-settings": {
+        "BUNDLE_LOADER": "$(TEST_HOST)",
+        "CURRENT_PROJECT_VERSION": "1",
+        "GENERATE_INFOPLIST_FILE": "YES",
+        "LD_RUNPATH_SEARCH_PATHS": [
+          "$(inherited)",
+          "@executable_path/../Frameworks",
+          "@loader_path/../Frameworks",
+        ],
+        "MARKETING_VERSION": "0.1.0",
+        "PRODUCT_BUNDLE_IDENTIFIER": "$(RESONANCE_BUNDLE_IDENTIFIER).ResonanceTests",
+        "PRODUCT_NAME": "$(TARGET_NAME)",
+        "TEST_HOST": "$(BUILT_PRODUCTS_DIR)/Resonance.app/Contents/MacOS/Resonance",
+      },
+    }, {
+      "name": "ResonanceLiveTests",
+      "id": "4BA0C24B10C654CE8CF01F77",
+      "product": "Products/ResonanceLiveTests.xctest",
+      "product-type": "bundle.unit-test",
+      "dependencies": [
+        "Resonance",
+      ],
+      "build-phases": [
+        "compile-sources",
+        "frameworks",
+        "resources",
+      ],
+      "package-product-members": [
+        {
+          "product-name": "ShazamFixtureSupport",
+          "build-phase": { "build-phase": "frameworks" },
+        }, {
+          "product-name": "ShazamRecognition",
+          "build-phase": { "build-phase": "frameworks" },
+        }, {
+          "product-name": "SystemAudioCapture",
+          "build-phase": { "build-phase": "frameworks" },
+        },
+      ],
+      "build-settings": {
+        "BUNDLE_LOADER": "$(TEST_HOST)",
+        "CURRENT_PROJECT_VERSION": "1",
+        "GENERATE_INFOPLIST_FILE": "YES",
+        "LD_RUNPATH_SEARCH_PATHS": [
+          "$(inherited)",
+          "@executable_path/../Frameworks",
+          "@loader_path/../Frameworks",
+        ],
+        "MARKETING_VERSION": "0.1.0",
+        "PRODUCT_BUNDLE_IDENTIFIER": "$(RESONANCE_BUNDLE_IDENTIFIER).ResonanceLiveTests",
+        "PRODUCT_NAME": "$(TARGET_NAME)",
+        "TEST_HOST": "$(BUILT_PRODUCTS_DIR)/Resonance.app/Contents/MacOS/Resonance",
+      },
+    },
+  ],
+  "build-settings": {
+    "DEBUG_INFORMATION_FORMAT[config=Debug]": "dwarf",
+    "DEBUG_INFORMATION_FORMAT[config=Release]": "dwarf-with-dsym",
+    "ENABLE_TESTABILITY[config=Debug]": "YES",
+    "SDKROOT": "macosx",
+    "SWIFT_ACTIVE_COMPILATION_CONDITIONS[config=Debug]": "DEBUG",
+    "SWIFT_COMPILATION_MODE[config=Release]": "wholemodule",
+    "SWIFT_OPTIMIZATION_LEVEL[config=Debug]": "-Onone",
+  },
+  "last-upgrade": "27.2",
+  "last-swift-update": "27.2",
+}

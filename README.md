@@ -12,7 +12,7 @@ In **Settings**, you can assign a global shortcut to recognize music while anoth
 
 ## Build and test
 
-Build with Xcode 26 or later on macOS 26 or later. Open `Resonance.xcodeproj`, select **Resonance**, and choose **Run**. The default development configuration builds with a local bundle identifier. Configure a registered App ID and signing identity to use the default Shazam catalog.
+Build with Xcode 27 or later on a Mac that meets [Xcode’s system requirements](https://developer.apple.com/xcode/system-requirements/). Resonance targets macOS 26.0 and later. Open `Resonance.xcodeproj`, select **Resonance**, and choose **Run**. The default development configuration builds with a local bundle identifier. Configure a registered App ID and signing identity to use the default Shazam catalog.
 
 Run `scripts/check` for package tests, the Xcode app build, and app-hosted deterministic tests. See the [contributor guide](CONTRIBUTING.md) for signing setup and optional live tests, and the [validation record](docs/validation.md) for results.
 
