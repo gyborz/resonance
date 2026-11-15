@@ -6,7 +6,7 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
         case starting
         case listening(cutoff: Duration, watchdog: Duration)
         case searching(cutoff: Duration)
-        case completing
+        case completing(startupPending: Bool)
     }
 
     // All reads and writes of an attempt are isolated to the coordinator.
@@ -18,11 +18,14 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
         var nextPosition: Int64 = 0
         var heardSignal = false
         var captureWork: Task<Void, Never>?
+        var frameWork: Task<Void, Never>?
+        var submittingFrame = false
         var resultWork: Task<Void, Never>?
         var deadlineWork: Task<Void, Never>?
         var supersededDeadlineWork: Task<Void, Never>?
         var captureStop: Task<Void, Never>?
         var cleanup: Task<Void, Never>?
+        var retryRequested = false
 
         init(capture: any AudioCaptureClient, matcher: any RecognitionClient) {
             self.capture = capture
@@ -70,7 +73,13 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
     }
 
     public func recognize() {
-        guard active == nil, !isShutDown else { return }
+        guard !isShutDown else { return }
+        if let active {
+            if snapshot.state == .cancelled {
+                active.retryRequested = true
+            }
+            return
+        }
         let capture = makeCapture()
         let matcher = makeRecognizer()
         let attempt = Attempt(capture: capture, matcher: matcher)
@@ -82,19 +91,28 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
         }
     }
 
-    public func cancel() async {
-        await stopAttempt(with: .cancelled)
+    public func cancel() {
+        guard let attempt = active else { return }
+        attempt.retryRequested = false
+        complete(attempt, with: .cancelled)
     }
 
     /// Ends the current attempt after an interruption such as system sleep.
     public func interrupt() async {
-        await stopAttempt(with: .failed(.captureInterrupted))
+        guard let attempt = active else { return }
+        attempt.retryRequested = false
+        complete(attempt, with: .failed(.captureInterrupted))
+        await attempt.cleanup?.value
     }
 
-    /// Waits for resource teardown before allowing the process to exit.
+    /// Drains a running capture before exit. During startup, cleanup remains owned
+    /// by its task while the app is free to quit even if the HAL call is still blocked.
     public func shutdown() async {
         isShutDown = true
-        await stopAttempt(with: .cancelled)
+        cancel()
+        if let attempt = active, case .completing(startupPending: false) = attempt.phase {
+            await attempt.cleanup?.value
+        }
         for observer in observers.values {
             observer.finish()
         }
@@ -150,6 +168,25 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
             scheduleDeadline(for: attempt, at: watchdog)
             publish(.listening)
 
+            let frameWork = Task<Void, Never> { [weak self] in
+                await self?.readFrames(frames, from: id, matcher: matcher)
+            }
+            attempt.frameWork = frameWork
+            await frameWork.value
+        } catch {
+            fail(id, with: error, defaultTo: RecognitionFailure.captureUnavailable)
+            return
+        }
+
+        await endInput(id, matcher: matcher)
+    }
+
+    private func readFrames(
+        _ frames: AsyncThrowingStream<PCMFrame, any Error>,
+        from id: RecognitionAttemptID,
+        matcher: any RecognitionClient
+    ) async {
+        do {
             for try await frame in frames {
                 guard frame.attemptID == id, !frame.samples.isEmpty else { continue }
                 guard await accept(frame, from: id) else { break }
@@ -159,13 +196,14 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
                     fail(id, with: error, defaultTo: RecognitionFailure.recognitionService)
                     return
                 }
+                guard let attempt = current(id) else { return }
+                attempt.submittingFrame = false
+                guard case .listening = attempt.phase else { return }
             }
         } catch {
+            guard !Task.isCancelled else { return }
             fail(id, with: error, defaultTo: RecognitionFailure.captureUnavailable)
-            return
         }
-
-        await endInput(id, matcher: matcher)
     }
 
     private func accept(_ frame: PCMFrame, from id: RecognitionAttemptID) async -> Bool {
@@ -197,6 +235,7 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
             }
         }
         attempt.nextPosition = nextPosition
+        attempt.submittingFrame = true
         return true
     }
 
@@ -207,17 +246,13 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
             finishCapture(attempt, at: min(ended, cutoff))
         }
 
-        guard case .searching = attempt.phase, let stop = attempt.captureStop else { return }
-        await stop.value
-
-        let now = await clock.now
-        guard let attempt = current(id), case .searching(let cutoff) = attempt.phase else { return }
-        guard now < cutoff else {
+        guard case .searching(let cutoff) = attempt.phase else { return }
+        guard ended < cutoff else {
             complete(attempt, with: .failed(.recognitionTimedOut))
             return
         }
-        // This runs on the capture worker after all accepted frames were submitted.
-        // The result task remains live until a match, error, or the grace deadline.
+        // The frame reader has finished submitting accepted audio. Hardware teardown
+        // runs independently while the matcher has the grace period to finish.
         do {
             try await matcher.finishInput()
         } catch {
@@ -320,6 +355,11 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
 
         let cutoff = ended + policy.resultGracePeriod
         attempt.phase = .searching(cutoff: cutoff)
+        // An idle read may be waiting for HAL teardown to finish the stream.
+        // An accepted frame still needs to finish submitting before we close input.
+        if !attempt.submittingFrame {
+            attempt.frameWork?.cancel()
+        }
         stopCapture(attempt)
         scheduleDeadline(for: attempt, at: cutoff)
         publish(.searching)
@@ -334,15 +374,11 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
         return stop
     }
 
-    private func stopAttempt(with state: RecognitionState) async {
-        guard let attempt = active else { return }
-        complete(attempt, with: state)
-        await attempt.cleanup?.value
-    }
-
     private func complete(_ attempt: Attempt, with state: RecognitionState) {
         guard attempt.cleanup == nil else { return }
-        attempt.phase = .completing
+        let startupPending = if case .starting = attempt.phase { true } else { false }
+        attempt.phase = .completing(startupPending: startupPending)
+        attempt.frameWork?.cancel()
         let workers = [attempt.captureWork, attempt.resultWork, attempt.deadlineWork].compactMap { $0 }
         for worker in workers {
             worker.cancel()
@@ -352,6 +388,7 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
         let supersededDeadline = attempt.supersededDeadlineWork
         let matcher = attempt.matcher
         let id = attempt.id
+        let stateAfterCleanup: RecognitionState? = state == .cancelled ? nil : state
         attempt.cleanup = Task { [weak self] in
             async let matcherStopped: Void = matcher.stop()
             await stop.value
@@ -360,14 +397,18 @@ public actor RecognitionCoordinator: RecognitionWorkflow {
             for worker in workers {
                 await worker.value
             }
-            await self?.didComplete(id, with: state)
+            await self?.didComplete(id, with: stateAfterCleanup)
+        }
+        if state == .cancelled {
+            publish(state)
         }
     }
 
-    private func didComplete(_ id: RecognitionAttemptID, with state: RecognitionState) {
-        guard active?.id == id else { return }
+    private func didComplete(_ id: RecognitionAttemptID, with state: RecognitionState?) {
+        guard let attempt = active, attempt.id == id else { return }
         active = nil
-        publish(state)
+        if let state { publish(state) }
+        if attempt.retryRequested { recognize() }
     }
 
     private func fail(

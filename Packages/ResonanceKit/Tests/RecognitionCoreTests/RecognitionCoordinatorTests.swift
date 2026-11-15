@@ -1,3 +1,4 @@
+import Dispatch
 import RecognitionCore
 import RecognitionTestSupport
 import Synchronization
@@ -35,13 +36,79 @@ struct RecognitionCoordinatorTests {
         await rig.clock.advance(by: .seconds(1))
         _ = try await states.wait(for: .searching)
         try await rig.waitForEndOfInput()
-        #expect(await rig.capture.stopCount == 1)
         #expect(await rig.matcher.stopCount == 0)
 
         await rig.clock.advance(by: .seconds(4))
         await rig.matcher.send(.init(attemptID: id, event: .match(track)))
 
         _ = try await states.wait(for: .matched(track))
+        await rig.expectReleased()
+    }
+
+    @Test func `The final query can win while capture teardown is blocked`() async throws {
+        let stopGate = AsyncGate()
+        let track = Self.track
+        defer { stopGate.release() }
+        let rig = Rig(capture: FakeAudioCapture(beforeStop: { await stopGate.wait() }))
+        var states = try await rig.startListening()
+        let id = try await rig.attemptID()
+        try await rig.feed([0.3])
+
+        await rig.clock.advance(by: .seconds(10))
+        _ = try await states.wait(for: .searching)
+        var stopEntry = stopGate.entered.stream.makeAsyncIterator()
+        try #require(await stopEntry.next() != nil)
+
+        let inputClosed = await receivesSignal(rig.inputEnded.stream)
+        #expect(inputClosed)
+        if inputClosed {
+            await rig.clock.advance(by: .seconds(4))
+            await rig.matcher.send(.init(attemptID: id, event: .match(track)))
+        } else {
+            // Force the old implementation's grace period to expire with teardown still blocked.
+            await rig.clock.advance(by: .seconds(5))
+        }
+        var matcherStop = rig.matcherStopped.stream.makeAsyncIterator()
+        try #require(await matcherStop.next() != nil)
+        #expect(await rig.matcher.finishCount == 1)
+
+        stopGate.release()
+        let result = try #require(await states.next())
+        #expect(result.state == .matched(track))
+        await rig.expectReleased()
+    }
+
+    @Test func `Finalization waits for an accepted frame and drops unread audio at the cutoff`() async throws {
+        let submitGate = AsyncGate()
+        let stopGate = AsyncGate()
+        defer {
+            submitGate.release()
+            stopGate.release()
+        }
+        let rig = Rig(
+            capture: FakeAudioCapture(beforeStop: { await stopGate.wait() }),
+            beforeSubmit: { await submitGate.wait() }
+        )
+        var states = try await rig.startListening()
+        let id = try await rig.attemptID()
+        let accepted = PCMFrame(attemptID: id, position: 0, samples: [0.3])
+        await rig.capture.send(accepted)
+        var submitStarted = submitGate.entered.stream.makeAsyncIterator()
+        try #require(await submitStarted.next() != nil)
+
+        await rig.clock.advance(by: .seconds(10))
+        _ = try await states.wait(for: .searching)
+        await rig.capture.send(.init(attemptID: id, position: 1, samples: [0.4]))
+        #expect(await rig.matcher.finishCount == 0)
+
+        submitGate.release()
+        try #require(await receivesSignal(rig.inputEnded.stream))
+        #expect(await rig.matcher.frames == [accepted])
+        #expect(await rig.matcher.finishCount == 1)
+
+        stopGate.release()
+        await rig.matcher.send(.init(attemptID: id, event: .noMatch(isFinal: true)))
+        _ = try await states.wait(for: .noMatch)
         await rig.expectReleased()
     }
 
@@ -145,20 +212,67 @@ struct RecognitionCoordinatorTests {
         #expect(await matcher.stopCount == 1)
     }
 
-    @Test func `Cancel while permission startup is suspended waits for rollback`() async throws {
-        let capture = CaptureAwaitingPermission()
-        let matcher = FakeRecognition()
-        let coordinator = RecognitionCoordinator(makeCapture: { capture }, makeRecognizer: { matcher })
-        var startup = await capture.requests.makeAsyncIterator()
+    @Test(arguments: [false, true])
+    func `Cancel and shutdown acknowledge a blocked HAL startup`(quitting: Bool) async throws {
+        let capture = CaptureWithBlockedStartup()
+        defer { capture.releaseStartup() }
+        let matcherStopped = AsyncStream<Void>.makeStream()
+        let matcher = FakeRecognition(onStop: { matcherStopped.continuation.yield(()) })
+        let retryCapture = FakeAudioCapture()
+        let retryMatcher = FakeRecognition()
+        let captureFactory = Mutex<[any AudioCaptureClient]>([capture, retryCapture])
+        let matcherFactory = Mutex([matcher, retryMatcher])
+        let coordinator = RecognitionCoordinator(
+            makeCapture: { captureFactory.withLock { $0.removeFirst() } },
+            makeRecognizer: { matcherFactory.withLock { $0.removeFirst() } }
+        )
+        var states = await coordinator.updates().makeAsyncIterator()
+        #expect(await states.next()?.state == .idle)
         await coordinator.recognize()
+        var startup = capture.startEntered.stream.makeAsyncIterator()
         _ = try #require(await startup.next())
+        #expect(await states.next()?.state == .starting)
 
-        await coordinator.cancel()
-        await capture.grant()
+        let commandReturned = AsyncStream<Void>.makeStream()
+        let command = Task {
+            if quitting {
+                await coordinator.shutdown()
+            } else {
+                await coordinator.cancel()
+            }
+            commandReturned.continuation.yield(())
+        }
 
-        #expect(await coordinator.snapshot.state == .cancelled)
-        #expect(await capture.stopCount == 1)
+        var stopped = matcherStopped.stream.makeAsyncIterator()
+        _ = try #require(await stopped.next())
+        let stateWhileBlocked = await coordinator.snapshot.state
+        #expect(stateWhileBlocked == .cancelled)
+        let returnedBeforeRelease = await receivesSignal(commandReturned.stream)
+        #expect(returnedBeforeRelease)
         #expect(await matcher.stopCount == 1)
+
+        if stateWhileBlocked == .cancelled {
+            #expect(await states.next()?.state == .cancelled)
+            // A request during cleanup is queued after Cancel and declined after Quit.
+            await coordinator.recognize()
+            await coordinator.recognize()
+            #expect(captureFactory.withLock { $0.count } == 1)
+        }
+        if quitting && returnedBeforeRelease {
+            #expect(await states.next() == nil)
+        }
+
+        capture.releaseStartup()
+        await command.value
+        var released = capture.stopped.stream.makeAsyncIterator()
+        _ = try #require(await released.next())
+        #expect(await capture.stopCount == 1)
+
+        if !quitting && stateWhileBlocked == .cancelled {
+            _ = try await states.wait(for: .listening)
+            #expect(await retryCapture.attempts.count == 1)
+        }
+        await coordinator.shutdown()
     }
 
     @Test func `A capture interruption is actionable and leaves no active worker`() async throws {
@@ -323,14 +437,18 @@ private struct Rig {
     let coordinator: RecognitionCoordinator
     let submitted = AsyncStream<PCMFrame>.makeStream()
     let inputEnded = AsyncStream<Void>.makeStream()
+    let matcherStopped = AsyncStream<Void>.makeStream()
 
-    init(capture: FakeAudioCapture = .init()) {
+    init(capture: FakeAudioCapture = .init(), beforeSubmit: @escaping @Sendable () async -> Void = {}) {
         self.capture = capture
         let onSubmit = submitted.continuation
         let onFinishInput = inputEnded.continuation
+        let onStop = matcherStopped.continuation
         let matcher = FakeRecognition(
+            beforeSubmit: beforeSubmit,
             onSubmit: { onSubmit.yield($0) },
-            onFinishInput: { onFinishInput.yield(()) }
+            onFinishInput: { onFinishInput.yield(()) },
+            onStop: { onStop.yield(()) }
         )
         self.matcher = matcher
         coordinator = RecognitionCoordinator(clock: clock, makeCapture: { capture }, makeRecognizer: { matcher })
@@ -376,6 +494,67 @@ private extension AsyncStream<RecognitionSnapshot>.Iterator {
             try #require(snapshot.state.isActive, "Expected \(state), got \(snapshot.state)")
         }
         return try #require(nil as RecognitionSnapshot?, "Observer ended while waiting for \(state)")
+    }
+}
+
+// A wall-clock watchdog prevents a blocked regression from hanging the suite.
+// The recognition deadline itself is driven exclusively by the manual clock.
+private func receivesSignal(_ stream: AsyncStream<Void>) async -> Bool {
+    await withTaskGroup(of: Bool.self) { group in
+        group.addTask {
+            var events = stream.makeAsyncIterator()
+            return await events.next() != nil
+        }
+        group.addTask {
+            try? await Task.sleep(for: .seconds(2))
+            return false
+        }
+        defer { group.cancelAll() }
+        return await group.next() ?? false
+    }
+}
+
+private final class AsyncGate: Sendable {
+    let entered = AsyncStream<Void>.makeStream()
+    private let permission = AsyncStream<Void>.makeStream()
+
+    func wait() async {
+        entered.continuation.yield(())
+        for await _ in permission.stream {}
+    }
+
+    func release() {
+        permission.continuation.finish()
+    }
+}
+
+private actor CaptureWithBlockedStartup: AudioCaptureClient {
+    nonisolated let startEntered = AsyncStream<Void>.makeStream()
+    nonisolated let stopped = AsyncStream<Void>.makeStream()
+    private let gate = DispatchSemaphore(value: 0)
+    private let worker = DispatchSerialQueue(label: "ResonanceTests.blockedHAL")
+    private let pipe = AsyncThrowingStream<PCMFrame, any Error>.makeStream()
+    private(set) var stopCount = 0
+
+    nonisolated var unownedExecutor: UnownedSerialExecutor {
+        worker.asUnownedSerialExecutor()
+    }
+
+    func start(attemptID: RecognitionAttemptID) throws -> AsyncThrowingStream<PCMFrame, any Error> {
+        startEntered.continuation.yield(())
+        gate.wait()
+        try Task.checkCancellation()
+        return pipe.stream
+    }
+
+    nonisolated func releaseStartup() {
+        gate.signal()
+    }
+
+    func stop() {
+        stopCount += 1
+        pipe.continuation.finish()
+        stopped.continuation.yield(())
     }
 }
 

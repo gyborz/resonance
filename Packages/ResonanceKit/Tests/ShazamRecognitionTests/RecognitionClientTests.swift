@@ -7,7 +7,8 @@ import Testing
 
 @testable import ShazamRecognition
 
-@Test func `Only another signature can follow the in-flight early request`() async throws {
+@Test(.timeLimit(.minutes(1)))
+func `Finishing input supersedes a stalled early query with the longer signature`() async throws {
     let probe = MatchProbe()
     let client = ShazamRecognitionClient(makeSession: { TestSession(probe: probe) })
     let attempt = RecognitionAttemptID()
@@ -21,16 +22,62 @@ import Testing
     try await submit(to: client, attempt: attempt, seconds: 5..<10)
     await client.finishInput()
     await client.finishInput()
-    #expect(probe.requestCount.withLock { $0 } == 1)
+    try #require(probe.requestCount.withLock { $0 } == 2)
+    #expect(probe.invalidations.withLock { $0 } == 1)
 
-    early.complete(.noMatch)
     let final = try #require(await requests.next())
     #expect(final.duration == 10)
+    #expect(final.sessionID != early.sessionID)
     early.complete(.match(RecognizedTrack(id: "stale", title: "Old callback", artist: nil)))
-    final.complete(.noMatch)
+    let track = RecognizedTrack(id: "current", title: "Full clip match", artist: "Test Artist")
+    final.complete(.match(track))
     var iterator = events.makeAsyncIterator()
-    #expect(await iterator.next() == RecognitionUpdate(attemptID: attempt, event: .noMatch(isFinal: true)))
+    #expect(await iterator.next() == RecognitionUpdate(attemptID: attempt, event: .match(track)))
     #expect(await iterator.next() == nil)
+    #expect(probe.invalidations.withLock { $0 } == 2)
+}
+
+@Test(.timeLimit(.minutes(1))) func `Finishing input retains an early query when no audio was added`() async throws {
+    let probe = MatchProbe()
+    let client = ShazamRecognitionClient(makeSession: { TestSession(probe: probe) })
+    let attempt = RecognitionAttemptID()
+    var updates = try await client.start(attemptID: attempt).makeAsyncIterator()
+    var requests = probe.requests.stream.makeAsyncIterator()
+    try await submit(to: client, attempt: attempt, seconds: 0..<5)
+    let early = try #require(await requests.next())
+
+    await client.finishInput()
+    #expect(probe.requestCount.withLock { $0 } == 1)
+    #expect(probe.invalidations.withLock { $0 } == 0)
+
+    early.complete(.noMatch)
+    #expect(await updates.next()?.event == .noMatch(isFinal: true))
+    #expect(await updates.next() == nil)
+    #expect(probe.invalidations.withLock { $0 } == 1)
+}
+
+@Test(.timeLimit(.minutes(1))) func `A final session setup failure closes the attempt`() async throws {
+    let probe = MatchProbe()
+    let createdSession = Mutex(false)
+    let failure = RecognitionFailure.recognitionService(diagnostic: "Final session setup failed")
+    let client = ShazamRecognitionClient(makeSession: {
+        let alreadyCreated = createdSession.withLock { created in
+            let alreadyCreated = created
+            created = true
+            return alreadyCreated
+        }
+        guard !alreadyCreated else { throw failure }
+        return TestSession(probe: probe)
+    })
+    let attempt = RecognitionAttemptID()
+    var updates = try await client.start(attemptID: attempt).makeAsyncIterator()
+
+    try await submit(to: client, attempt: attempt, seconds: 0..<10)
+    await client.finishInput()
+
+    #expect(await updates.next()?.event == .failure(failure))
+    #expect(await updates.next() == nil)
+    #expect(probe.requestCount.withLock { $0 } == 1)
     #expect(probe.invalidations.withLock { $0 } == 1)
 }
 
@@ -106,7 +153,7 @@ import Testing
     let early = try #require(await requests.next())
     #expect(early.duration == 5)
     await client.finishInput()
-    early.complete(.noMatch)
+    try #require(probe.requestCount.withLock { $0 } == 2)
     let final = try #require(await requests.next())
     #expect(final.duration == 6)
     await client.stop()
@@ -141,6 +188,7 @@ private func submit(
 
 private final class MatchProbe: Sendable {
     struct Request: Sendable {
+        let sessionID: UUID
         let duration: TimeInterval
         let complete: @Sendable (SignatureMatch) -> Void
     }
@@ -151,6 +199,7 @@ private final class MatchProbe: Sendable {
 }
 
 private final class TestSession: SignatureMatchingSession {
+    let id = UUID()
     let probe: MatchProbe
     let minimumDuration: TimeInterval
     let maximumDuration: TimeInterval
@@ -163,11 +212,12 @@ private final class TestSession: SignatureMatchingSession {
 
     func match(_ signature: SHSignature, completion: @escaping @Sendable (SignatureMatch) -> Void) {
         probe.requestCount.withLock { $0 += 1 }
-        probe.requests.continuation.yield(MatchProbe.Request(duration: signature.duration, complete: completion))
+        probe.requests.continuation.yield(MatchProbe.Request(
+            sessionID: id, duration: signature.duration, complete: completion
+        ))
     }
 
     func invalidate() {
         probe.invalidations.withLock { $0 += 1 }
-        probe.requests.continuation.finish()
     }
 }
