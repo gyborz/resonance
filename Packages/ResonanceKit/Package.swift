@@ -9,6 +9,7 @@ let package = Package(
         .library(name: "SystemAudioCapture", targets: ["SystemAudioCapture"]),
         .library(name: "RecognitionTestSupport", targets: ["RecognitionTestSupport"]),
         .library(name: "ShazamRecognition", targets: ["ShazamRecognition"]),
+        .library(name: "ShazamFixtureSupport", targets: ["ShazamFixtureSupport"]),
     ],
     targets: [
         .target(name: "RecognitionCore"),
