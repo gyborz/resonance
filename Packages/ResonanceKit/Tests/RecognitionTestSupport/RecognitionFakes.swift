@@ -4,11 +4,16 @@ import RecognitionCore
 public actor FakeAudioCapture: AudioCaptureClient {
     private let pipe = AsyncThrowingStream<PCMFrame, any Error>.makeStream()
     private let startupError: RecognitionFailure?
+    private let beforeStop: @Sendable () async -> Void
     public private(set) var attempts: [RecognitionAttemptID] = []
     public private(set) var stopCount = 0
 
-    public init(startupError: RecognitionFailure? = nil) {
+    public init(
+        startupError: RecognitionFailure? = nil,
+        beforeStop: @escaping @Sendable () async -> Void = {}
+    ) {
         self.startupError = startupError
+        self.beforeStop = beforeStop
     }
 
     public func start(attemptID: RecognitionAttemptID) throws -> AsyncThrowingStream<PCMFrame, any Error> {
@@ -26,21 +31,36 @@ public actor FakeAudioCapture: AudioCaptureClient {
         pipe.continuation.finish(throwing: error)
     }
 
-    public func stop() {
-        guard stopCount == 0 else { return }
+    public func stop() async {
         stopCount += 1
+        guard stopCount == 1 else { return }
+        await beforeStop()
         end()
     }
 }
 
 public actor FakeRecognition: RecognitionClient {
     private let pipe = AsyncStream<RecognitionUpdate>.makeStream()
+    private let beforeSubmit: @Sendable () async -> Void
+    private let onSubmit: @Sendable (PCMFrame) -> Void
+    private let onFinishInput: @Sendable () -> Void
+    private let onStop: @Sendable () -> Void
     public private(set) var attempts: [RecognitionAttemptID] = []
     public private(set) var frames: [PCMFrame] = []
     public private(set) var finishCount = 0
     public private(set) var stopCount = 0
 
-    public init() {}
+    public init(
+        beforeSubmit: @escaping @Sendable () async -> Void = {},
+        onSubmit: @escaping @Sendable (PCMFrame) -> Void = { _ in },
+        onFinishInput: @escaping @Sendable () -> Void = {},
+        onStop: @escaping @Sendable () -> Void = {}
+    ) {
+        self.beforeSubmit = beforeSubmit
+        self.onSubmit = onSubmit
+        self.onFinishInput = onFinishInput
+        self.onStop = onStop
+    }
 
     public func start(attemptID: RecognitionAttemptID) throws -> AsyncStream<RecognitionUpdate> {
         guard stopCount == 0 else { throw CancellationError() }
@@ -48,9 +68,11 @@ public actor FakeRecognition: RecognitionClient {
         return pipe.stream
     }
 
-    public func submit(_ frame: PCMFrame) {
-        guard stopCount == 0 && finishCount == 0 else { return }
+    public func submit(_ frame: PCMFrame) async {
+        await beforeSubmit()
+        guard !Task.isCancelled, stopCount == 0, finishCount == 0 else { return }
         frames.append(frame)
+        onSubmit(frame)
     }
 
     public func send(_ event: RecognitionUpdate) {
@@ -59,12 +81,14 @@ public actor FakeRecognition: RecognitionClient {
 
     public func finishInput() {
         finishCount += 1
+        onFinishInput()
     }
 
     public func stop() {
-        guard stopCount == 0 else { return }
         stopCount += 1
+        guard stopCount == 1 else { return }
         pipe.continuation.finish()
+        onStop()
     }
 }
 
@@ -76,6 +100,7 @@ public actor ManualRecognitionClock: RecognitionClock {
 
     public private(set) var now: Duration = .zero
     private var sleepers: [UUID: Sleeper] = [:]
+    public var pendingSleepCount: Int { sleepers.count }
 
     public init() {}
 
