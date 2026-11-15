@@ -1,0 +1,2 @@
+#include "Shared.xcconfig"
+ENABLE_HARDENED_RUNTIME = YES

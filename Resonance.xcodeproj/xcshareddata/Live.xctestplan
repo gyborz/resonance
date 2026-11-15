@@ -1,0 +1,27 @@
+{
+  "configurations": [
+    {
+      "id": "A2E57D43-7991-53C0-BBF6-74AD68A1D2CE",
+      "name": "Live",
+      "options": {}
+    }
+  ],
+  "defaultOptions": {
+    "targetForVariableExpansion": {
+      "containerPath": "container:Resonance.xcodeproj",
+      "identifier": "510890EA2B3F5AD7A73FFC37",
+      "name": "Resonance"
+    }
+  },
+  "testTargets": [
+    {
+      "target": {
+        "containerPath": "container:Resonance.xcodeproj",
+        "identifier": "4BA0C24B10C654CE8CF01F77",
+        "name": "ResonanceLiveTests"
+      },
+      "parallelizable": false
+    }
+  ],
+  "version": 1
+}

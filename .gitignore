@@ -1,0 +1,9 @@
+.DS_Store
+.build/
+DerivedData/
+.swiftpm/
+*.xcuserstate
+xcuserdata/
+*.xcresult/
+Resonance/Configuration/Local.xcconfig
+dist/
