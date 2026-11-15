@@ -1,0 +1,11 @@
+MACOSX_DEPLOYMENT_TARGET = 26.0
+SWIFT_VERSION = 6.0
+SWIFT_STRICT_CONCURRENCY = complete
+ENABLE_APP_SANDBOX = NO
+CODE_SIGN_STYLE = Automatic
+
+// Development-only default. Override for a real registered App ID.
+RESONANCE_BUNDLE_IDENTIFIER = local.resonance.development
+#include? "Local.xcconfig"
+
+ALWAYS_SEARCH_USER_PATHS = NO

@@ -1,0 +1,9 @@
+#!/bin/bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+swift test --package-path Packages/ResonanceKit
+xcodebuild -project Resonance.xcodeproj -scheme Resonance \
+    -destination 'platform=macOS' -derivedDataPath DerivedData build
+xcodebuild -project Resonance.xcodeproj -scheme Resonance \
+    -testPlan Deterministic -destination 'platform=macOS' -derivedDataPath DerivedData test

@@ -1,0 +1,27 @@
+{
+  "configurations": [
+    {
+      "id": "B959DC2A-CA61-5BFC-A1D5-34890F380A54",
+      "name": "Deterministic",
+      "options": {}
+    }
+  ],
+  "defaultOptions": {
+    "targetForVariableExpansion": {
+      "containerPath": "container:Resonance.xcodeproj",
+      "identifier": "510890EA2B3F5AD7A73FFC37",
+      "name": "Resonance"
+    }
+  },
+  "testTargets": [
+    {
+      "target": {
+        "containerPath": "container:Resonance.xcodeproj",
+        "identifier": "8CCEE5C0B5885D1EA6205902",
+        "name": "ResonanceTests"
+      },
+      "parallelizable": true
+    }
+  ],
+  "version": 1
+}
