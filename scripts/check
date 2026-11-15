@@ -2,8 +2,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+destination="platform=macOS,arch=$(uname -m)"
 swift test --package-path Packages/ResonanceKit
 xcodebuild -project Resonance.xcodeproj -scheme Resonance \
-    -destination 'platform=macOS' -derivedDataPath DerivedData build
+    -destination "$destination" -derivedDataPath DerivedData build
 xcodebuild -project Resonance.xcodeproj -scheme Resonance \
-    -testPlan Deterministic -destination 'platform=macOS' -derivedDataPath DerivedData test
+    -testPlan Deterministic -destination "$destination" -derivedDataPath DerivedData test

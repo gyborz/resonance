@@ -1,0 +1,35 @@
+name: macOS checks
+
+on:
+  push:
+    branches:
+      - main
+      - resonance/08-release
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+      - name: Build and test
+        run: scripts/check
+      - name: Save Xcode test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resonance-xcode-test-results
+          path: DerivedData/Logs/Test/*.xcresult
+          if-no-files-found: ignore
