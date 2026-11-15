@@ -3,11 +3,13 @@ import Foundation
 import Observation
 import RecognitionCore
 
-struct ShortcutKey: Identifiable {
+struct ShortcutKey {
     let id: UInt16
     let fallbackLabel: String
 
-    var label: String { KeyboardLayout.label(for: id) ?? fallbackLabel }
+    func label(using source: TISInputSource?, modifiers: ShortcutModifiers) -> String {
+        KeyboardLayout.label(for: id, modifiers: modifiers, source: source) ?? fallbackLabel
+    }
 
     static let choices: [Self] = [
         (kVK_ANSI_A, "A"), (kVK_ANSI_B, "B"), (kVK_ANSI_C, "C"),
@@ -26,8 +28,8 @@ struct ShortcutKey: Identifiable {
 }
 
 private enum KeyboardLayout {
-    static func label(for keyCode: UInt16) -> String? {
-        guard let source = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue(),
+    static func label(for keyCode: UInt16, modifiers: ShortcutModifiers, source: TISInputSource?) -> String? {
+        guard let source,
               let property = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else {
             return nil
         }
@@ -35,12 +37,14 @@ private enum KeyboardLayout {
         let data = Unmanaged<CFData>.fromOpaque(property).takeUnretainedValue()
         guard let bytes = CFDataGetBytePtr(data) else { return nil }
         let layout = UnsafeRawPointer(bytes).assumingMemoryBound(to: UCKeyboardLayout.self)
+        // Command can remap the base key. The other modifiers have their own glyphs.
+        let modifierState = modifiers.contains(.command) ? UInt32(cmdKey) >> 8 : 0
         var deadKeyState: UInt32 = 0
         var length = 0
         var units = [UniChar](repeating: 0, count: 8)
         let status = withExtendedLifetime(source) {
             UCKeyTranslate(
-                layout, keyCode, UInt16(kUCKeyActionDisplay), 0, UInt32(LMGetKbdType()),
+                layout, keyCode, UInt16(kUCKeyActionDisplay), modifierState, UInt32(LMGetKbdType()),
                 OptionBits(kUCKeyTranslateNoDeadKeysMask), &deadKeyState, units.count, &length, &units
             )
         }
@@ -58,12 +62,27 @@ private extension GlobalShortcut {
             && modifiers.subtracting(supported).isEmpty
     }
 
-    var label: String {
+    func label(with keyLabel: String) -> String {
         let modifierLabels: [(ShortcutModifiers, String)] = [
             (.control, "⌃"), (.option, "⌥"), (.shift, "⇧"), (.command, "⌘"),
         ]
         let prefix = modifierLabels.filter { modifiers.contains($0.0) }.map(\.1).joined()
-        return prefix + (ShortcutKey.choices.first { $0.id == keyCode }?.label ?? "")
+        return prefix + keyLabel
+    }
+
+    func overlapsCommonAppCommand(keyLabel: String) -> Bool {
+        switch modifiers {
+        case .command:
+            ["A", "C", "F", "G", "H", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "V", "W", "X", "Z"].contains(keyLabel)
+        case [.command, .shift]:
+            ["G", "N", "S", "Z"].contains(keyLabel)
+        case [.command, .option]:
+            ["C", "H", "M", "Q", "V", "W"].contains(keyLabel)
+        case [.command, .option, .shift]:
+            keyLabel == "V"
+        default:
+            false
+        }
     }
 }
 
@@ -107,23 +126,45 @@ final class ShortcutSettingsModel {
     private(set) var configured: GlobalShortcut?
     private(set) var isRegistered = false
     private(set) var issue: Issue?
+    private(set) var shortcutToConfirm: GlobalShortcut?
 
     @ObservationIgnored private let store: ShortcutSettingsStore
     @ObservationIgnored private let registrar: any ShortcutRegistering
+    @ObservationIgnored private let keyboardSource: @MainActor () -> TISInputSource?
     @ObservationIgnored private let onRecognize: @MainActor () -> Void
     @ObservationIgnored private var didStart = false
 
     init(
         store: ShortcutSettingsStore,
         registrar: any ShortcutRegistering,
+        keyboardSource: @escaping @MainActor () -> TISInputSource? = {
+            TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue()
+        },
         onRecognize: @escaping @MainActor () -> Void
     ) {
         self.store = store
         self.registrar = registrar
+        self.keyboardSource = keyboardSource
         self.onRecognize = onRecognize
     }
 
-    var shortcutLabel: String? { configured?.label }
+    var shortcutLabel: String? { configured.map { label(for: $0) } }
+
+    func label(for shortcut: GlobalShortcut) -> String {
+        shortcut.label(with: keyLabel(for: shortcut))
+    }
+
+    func keyLabels(for modifiers: ShortcutModifiers) -> [(id: UInt16, label: String)] {
+        let source = keyboardSource()
+        return ShortcutKey.choices.map { key in
+            (id: key.id, label: key.label(using: source, modifiers: modifiers))
+        }.sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
+    }
+
+    private func keyLabel(for shortcut: GlobalShortcut) -> String {
+        ShortcutKey.choices.first { $0.id == shortcut.keyCode }?
+            .label(using: keyboardSource(), modifiers: shortcut.modifiers) ?? ""
+    }
 
     func start() {
         guard !didStart else { return }
@@ -135,6 +176,7 @@ final class ShortcutSettingsModel {
     }
 
     func assign(_ shortcut: GlobalShortcut) {
+        shortcutToConfirm = nil
         guard shortcut.isValid else {
             issue = .invalidShortcut
             return
@@ -143,7 +185,22 @@ final class ShortcutSettingsModel {
             issue = nil
             return
         }
+        if shortcut.overlapsCommonAppCommand(keyLabel: keyLabel(for: shortcut)) {
+            issue = nil
+            shortcutToConfirm = shortcut
+            return
+        }
         register(shortcut, persist: true)
+    }
+
+    func confirmAssignment(_ shortcut: GlobalShortcut) {
+        guard shortcutToConfirm == shortcut else { return }
+        shortcutToConfirm = nil
+        register(shortcut, persist: true)
+    }
+
+    func dismissAssignmentWarning() {
+        shortcutToConfirm = nil
     }
 
     func disable() {
@@ -154,6 +211,7 @@ final class ShortcutSettingsModel {
     }
 
     func stop() {
+        shortcutToConfirm = nil
         guard isRegistered else { return }
         registrar.unregister()
         isRegistered = false

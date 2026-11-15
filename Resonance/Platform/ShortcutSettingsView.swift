@@ -15,6 +15,9 @@ struct ShortcutSettingsView: View {
     }
 
     var body: some View {
+        let shortcut = GlobalShortcut(keyCode: keyCode, modifiers: modifiers)
+        let needsConfirmation = model.shortcutToConfirm == shortcut
+        let keys = model.keyLabels(for: modifiers)
         Form {
             Section("Recognition Shortcut") {
                 if let label = model.shortcutLabel {
@@ -25,7 +28,7 @@ struct ShortcutSettingsView: View {
                 }
 
                 Picker("Key", selection: $keyCode) {
-                    ForEach(ShortcutKey.choices.sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }) { key in
+                    ForEach(keys, id: \.id) { key in
                         Text(key.label).tag(key.id)
                     }
                 }
@@ -39,21 +42,31 @@ struct ShortcutSettingsView: View {
                     Text(issue.description)
                         .foregroundStyle(.secondary)
                 }
+                if needsConfirmation {
+                    Text("\(model.label(for: shortcut)) overlaps a common app command. Pressing it in other apps may trigger recognition.")
+                }
 
                 HStack {
                     Button("Disable Shortcut") { model.disable() }
                         .disabled(model.configured == nil)
                     Spacer()
-                    Button("Save Shortcut") {
-                        model.assign(GlobalShortcut(keyCode: keyCode, modifiers: modifiers))
+                    if needsConfirmation {
+                        Button("Cancel") { model.dismissAssignmentWarning() }
+                        Button("Save Anyway") { model.confirmAssignment(shortcut) }
+                            .buttonStyle(.borderedProminent)
+                    } else {
+                        Button("Save Shortcut") { model.assign(shortcut) }
+                            .buttonStyle(.borderedProminent)
                     }
-                    .buttonStyle(.borderedProminent)
                 }
             }
         }
         .formStyle(.grouped)
         .frame(width: 390)
         .fixedSize(horizontal: false, vertical: true)
+        .onChange(of: shortcut) {
+            model.dismissAssignmentWarning()
+        }
     }
 
     private func modifierBinding(_ modifier: ShortcutModifiers) -> Binding<Bool> {
