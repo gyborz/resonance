@@ -38,13 +38,13 @@ struct RecognitionPresentationTests {
         var quit = false
         let model = makeModel(quit: { quit = true })
 
-        await model.recognize()
+        await model.requestRecognition()?.value
         model.apply(.init(state: .listening))
-        await model.recognize()
+        await model.requestRecognition()?.value
         await model.cancel()
         model.apply(.init(state: .noMatch))
         #expect(String(localized: model.recognizeTitle) == "Try Again")
-        await model.recognize()
+        await model.requestRecognition()?.value
         model.openSettings { settingsOpened = true }
         model.quit()
 
@@ -65,13 +65,13 @@ struct RecognitionPresentationTests {
             markSeen: { firstUse.seen = true }
         )
 
-        await model.recognize()
+        await model.requestRecognition()?.value
         #expect(await workflow.recognizeCount == 0)
         #expect(!firstUse.seen)
 
         firstUse.accept = true
-        await model.recognize()
-        await model.recognize()
+        await model.requestRecognition()?.value
+        await model.requestRecognition()?.value
         #expect(firstUse.seen)
         #expect(firstUse.explanationCount == 2)
         #expect(await workflow.recognizeCount == 2)
@@ -93,7 +93,7 @@ struct RecognitionPresentationTests {
             makeRecognizer: { FakeRecognition() }
         )
         let model = makeModel(workflow: coordinator)
-        await model.recognize()
+        await model.requestRecognition()?.value
         model.apply(try await listeningSnapshot(from: coordinator))
         await model.cancel()
         var stops = stopStarted.stream.makeAsyncIterator()
@@ -102,7 +102,7 @@ struct RecognitionPresentationTests {
         model.apply(try #require(await updates.next()))
         #expect(model.canRecognize)
 
-        await model.recognize()
+        await model.requestRecognition()?.value
         model.apply(try #require(await updates.next()))
         #expect(String(localized: model.status.title) == "Recognition queued")
         #expect(model.canCancel)

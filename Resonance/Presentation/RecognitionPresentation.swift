@@ -111,6 +111,7 @@ struct RecognitionStatusPresentation {
 final class RecognitionPresentationModel {
     private(set) var snapshot = RecognitionSnapshot()
     private(set) var isExplaining = false
+    private var recognitionSuspended = false
 
     @ObservationIgnored private let workflow: any RecognitionWorkflow
     @ObservationIgnored private let urlOpener: any TrackURLOpening
@@ -119,6 +120,7 @@ final class RecognitionPresentationModel {
     @ObservationIgnored private let markExplanationSeen: @MainActor () -> Void
     @ObservationIgnored private let quitApplication: @MainActor () -> Void
     @ObservationIgnored private var observation: Task<Void, Never>?
+    @ObservationIgnored private var recognitionRequest: Task<Void, Never>?
 
     init(
         workflow: any RecognitionWorkflow,
@@ -138,13 +140,14 @@ final class RecognitionPresentationModel {
 
     deinit {
         observation?.cancel()
+        recognitionRequest?.cancel()
     }
 
     var status: RecognitionStatusPresentation { RecognitionStatusPresentation(snapshot) }
     var track: TrackPresentation? {
         snapshot.lastTrack.map { TrackPresentation($0, urlOpener: urlOpener) }
     }
-    var canRecognize: Bool { !snapshot.isActive && !isExplaining }
+    var canRecognize: Bool { !recognitionSuspended && !snapshot.isActive && !isExplaining }
     var canCancel: Bool { snapshot.isActive }
     var isLatestMatch: Bool {
         if case .matched = snapshot.state { return true }
@@ -172,13 +175,30 @@ final class RecognitionPresentationModel {
         self.snapshot = snapshot
     }
 
-    func recognize() async {
-        guard canRecognize else { return }
+    func setRecognitionSuspended(_ suspended: Bool) {
+        recognitionSuspended = suspended
+        if suspended { recognitionRequest?.cancel() }
+    }
+
+    @discardableResult
+    func requestRecognition() -> Task<Void, Never>? {
+        guard canRecognize, recognitionRequest == nil else { return nil }
+        let request = Task { [weak self] in
+            guard let self else { return }
+            defer { recognitionRequest = nil }
+            await recognize()
+        }
+        recognitionRequest = request
+        return request
+    }
+
+    private func recognize() async {
+        guard canRecognize, !Task.isCancelled else { return }
         if needsExplanation() {
             isExplaining = true
             let agreed = await explainSystemAudio()
             isExplaining = false
-            guard agreed else { return }
+            guard agreed, !Task.isCancelled else { return }
             markExplanationSeen()
         }
         await workflow.recognize()

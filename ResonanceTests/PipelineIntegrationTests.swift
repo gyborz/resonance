@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Carbon
 import Foundation
@@ -27,7 +28,7 @@ struct PipelineIntegrationTests {
         let (runtime, _, defaults) = try makeRuntime(coordinator: coordinator)
         defer { defaults.removePersistentDomain(forName: settingsSuite) }
         runtime.start()
-        await runtime.presentation.recognize()
+        await runtime.presentation.requestRecognition()?.value
         let result = try await waitFor(runtime.presentation) { !$0.state.isActive && $0.state != .idle }
         await runtime.shutdown()
 
@@ -42,6 +43,76 @@ struct PipelineIntegrationTests {
             #expect(result.state == .noMatch)
             #expect(runtime.presentation.track == nil)
         }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func `Recognition stays blocked after the sleep interruption until a fresh trigger after wake`() async throws {
+        let firstCapture = FakeAudioCapture()
+        let secondCapture = FakeAudioCapture()
+        let captures = Mutex([firstCapture, secondCapture])
+        let coordinator = RecognitionCoordinator(
+            clock: ManualRecognitionClock(),
+            makeCapture: { captures.withLock { $0.removeFirst() } },
+            makeRecognizer: { FakeRecognition() }
+        )
+        let notifications = NotificationCenter()
+        let (runtime, registrar, defaults) = try makeRuntime(coordinator: coordinator, workspaceNotifications: notifications)
+        defer { defaults.removePersistentDomain(forName: settingsSuite) }
+        runtime.start()
+        runtime.shortcuts.assign(GlobalShortcut(keyCode: UInt16(kVK_ANSI_R), modifiers: [.control, .option]))
+        registrar.press()
+        _ = try await waitFor(runtime.presentation) { $0.state == .listening }
+
+        notifications.post(name: NSWorkspace.willSleepNotification, object: NSWorkspace.shared)
+        _ = try await waitFor(runtime.presentation) { $0.state == .failed(.captureInterrupted) }
+        #expect(await firstCapture.stopCount == 1)
+        #expect(!runtime.presentation.canRecognize)
+
+        registrar.press()
+        #expect(runtime.presentation.requestRecognition() == nil)
+        await coordinator.recognize()
+        #expect(await secondCapture.attempts.isEmpty)
+        notifications.post(name: NSWorkspace.didWakeNotification, object: NSWorkspace.shared)
+        _ = try await waitFor(runtime.presentation) { _ in runtime.presentation.canRecognize }
+        #expect(await secondCapture.attempts.isEmpty)
+
+        registrar.press()
+        _ = try await waitFor(runtime.presentation) { $0.state == .listening }
+        #expect(await secondCapture.attempts.count == 1)
+        await runtime.shutdown()
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func `A trigger pending at sleep stays discarded across an immediate wake`() async throws {
+        let factoryCalls = Mutex(0)
+        let coordinator = RecognitionCoordinator(
+            clock: ManualRecognitionClock(),
+            makeCapture: {
+                factoryCalls.withLock { $0 += 1 }
+                return FakeAudioCapture()
+            },
+            makeRecognizer: { FakeRecognition() }
+        )
+        let notifications = NotificationCenter()
+        let (runtime, registrar, defaults) = try makeRuntime(coordinator: coordinator, workspaceNotifications: notifications)
+        defer { defaults.removePersistentDomain(forName: settingsSuite) }
+        runtime.start()
+        runtime.shortcuts.assign(GlobalShortcut(keyCode: UInt16(kVK_ANSI_R), modifiers: [.control, .option]))
+
+        let pending = try #require(runtime.presentation.requestRecognition())
+        notifications.post(name: NSWorkspace.willSleepNotification, object: NSWorkspace.shared)
+        #expect(!runtime.presentation.canRecognize)
+        registrar.press()
+        notifications.post(name: NSWorkspace.didWakeNotification, object: NSWorkspace.shared)
+        await pending.value
+        _ = try await waitFor(runtime.presentation) { _ in runtime.presentation.canRecognize }
+        #expect(factoryCalls.withLock { $0 } == 0)
+        #expect(await coordinator.snapshot.state == .idle)
+
+        await runtime.presentation.requestRecognition()?.value
+        _ = try await waitFor(runtime.presentation) { $0.state == .listening }
+        #expect(factoryCalls.withLock { $0 } == 1)
+        await runtime.shutdown()
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -66,14 +137,14 @@ struct PipelineIntegrationTests {
 
         registrar.press()
         _ = try await waitFor(runtime.presentation) { $0.state == .listening }
-        await runtime.presentation.recognize()
+        await runtime.presentation.requestRecognition()?.value
         #expect(factoryCalls.withLock { $0 } == 1)
 
         await runtime.shutdown()
         #expect(await capture.stopCount == 1)
         #expect(await matcher.stopCount == 1)
         #expect(registrar.registered == nil)
-        await runtime.presentation.recognize()
+        await runtime.presentation.requestRecognition()?.value
         #expect(factoryCalls.withLock { $0 } == 1)
     }
 
@@ -93,7 +164,7 @@ struct PipelineIntegrationTests {
         let (runtime, _, defaults) = try makeRuntime(coordinator: coordinator)
         defer { defaults.removePersistentDomain(forName: settingsSuite) }
         runtime.start()
-        await runtime.presentation.recognize()
+        await runtime.presentation.requestRecognition()?.value
         _ = try await waitFor(runtime.presentation) { $0.state == .listening }
 
         switch failure {
@@ -136,13 +207,13 @@ struct PipelineIntegrationTests {
         let (runtime, _, defaults) = try makeRuntime(coordinator: coordinator)
         defer { defaults.removePersistentDomain(forName: settingsSuite) }
         runtime.start()
-        await runtime.presentation.recognize()
+        await runtime.presentation.requestRecognition()?.value
         _ = try await waitFor(runtime.presentation) { $0.state == .listening }
         let firstID = try #require(await firstCapture.attempts.first)
 
         await runtime.presentation.cancel()
         _ = try await waitFor(runtime.presentation) { $0.state == .cancelled }
-        await runtime.presentation.recognize()
+        await runtime.presentation.requestRecognition()?.value
         _ = try await waitFor(runtime.presentation) { $0.state == .listening }
         let secondID = try #require(await secondCapture.attempts.first)
         #expect(firstID != secondID)
@@ -164,13 +235,15 @@ struct PipelineIntegrationTests {
     }
 
     private func makeRuntime(
-        coordinator: RecognitionCoordinator
+        coordinator: RecognitionCoordinator,
+        workspaceNotifications: NotificationCenter = NotificationCenter()
     ) throws -> (RecognitionRuntime, FakeShortcutRegistrar, UserDefaults) {
         let defaults = try #require(UserDefaults(suiteName: settingsSuite))
         let registrar = FakeShortcutRegistrar()
         let runtime = RecognitionRuntime(
             coordinator: coordinator, defaults: defaults, registrar: registrar,
-            urlOpener: RecordingURLOpener(), explainSystemAudio: { true }, quit: {}
+            urlOpener: RecordingURLOpener(), workspaceNotifications: workspaceNotifications,
+            explainSystemAudio: { true }, quit: {}
         )
         return (runtime, registrar, defaults)
     }
@@ -181,14 +254,15 @@ struct PipelineIntegrationTests {
     ) async throws -> RecognitionSnapshot {
         while !Task.isCancelled {
             let changes = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
-            let snapshot = withObservationTracking {
-                model.snapshot
+            let (snapshot, matches) = withObservationTracking {
+                let snapshot = model.snapshot
+                return (snapshot, predicate(snapshot))
             } onChange: {
                 changes.continuation.yield(())
                 changes.continuation.finish()
             }
 
-            if predicate(snapshot) {
+            if matches {
                 changes.continuation.finish()
                 return snapshot
             }

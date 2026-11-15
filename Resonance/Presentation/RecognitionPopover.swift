@@ -58,7 +58,7 @@ struct RecognitionPopover: View {
                 .keyboardShortcut(.cancelAction)
             } else {
                 Button {
-                    Task { await model.recognize() }
+                    model.requestRecognition()
                 } label: {
                     Text(model.recognizeTitle)
                         .frame(maxWidth: .infinity)
