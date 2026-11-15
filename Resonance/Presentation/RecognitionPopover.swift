@@ -9,7 +9,7 @@ struct RecognitionPopover: View {
         VStack(alignment: .leading, spacing: 16) {
             statusHeader
             if let track = model.track {
-                TrackCard(track: track, isLatestMatch: model.isLatestMatch, openAppleMusic: model.openAppleMusic)
+                TrackCard(track: track, isLatestMatch: model.isLatestMatch)
             }
             commands
         }
@@ -58,7 +58,7 @@ struct RecognitionPopover: View {
                 .keyboardShortcut(.cancelAction)
             } else {
                 Button {
-                    Task { await model.recognize() }
+                    model.requestRecognition()
                 } label: {
                     Text(model.recognizeTitle)
                         .frame(maxWidth: .infinity)
@@ -87,7 +87,6 @@ struct RecognitionPopover: View {
 private struct TrackCard: View {
     let track: TrackPresentation
     let isLatestMatch: Bool
-    let openAppleMusic: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -108,7 +107,7 @@ private struct TrackCard: View {
                 .accessibilityElement(children: .combine)
             }
 
-            if track.appleMusicURL != nil {
+            if let openAppleMusic = track.openAppleMusic {
                 Button(action: openAppleMusic) {
                     Label("Open in Apple Music", systemImage: "arrow.up.right")
                 }

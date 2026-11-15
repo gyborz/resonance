@@ -7,7 +7,6 @@ import SystemAudioCapture
 final class ResonanceAppDelegate: NSObject, NSApplicationDelegate {
     let runtime = RecognitionRuntime()
 
-    private var sleepObserver: (any NSObjectProtocol)?
     private var isTerminating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -17,22 +16,11 @@ final class ResonanceAppDelegate: NSObject, NSApplicationDelegate {
         #endif
 
         runtime.start()
-        let coordinator = runtime.coordinator
-        sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
-        ) { _ in
-            Task { await coordinator.interrupt() }
-        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !isTerminating else { return .terminateLater }
         isTerminating = true
-
-        if let sleepObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver)
-            self.sleepObserver = nil
-        }
 
         Task {
             await runtime.shutdown()
@@ -44,9 +32,17 @@ final class ResonanceAppDelegate: NSObject, NSApplicationDelegate {
 
 @MainActor
 final class RecognitionRuntime {
+    private enum Lifecycle {
+        case awake, sleeping, shuttingDown
+    }
+
     let coordinator: RecognitionCoordinator
     let presentation: RecognitionPresentationModel
     let shortcuts: ShortcutSettingsModel
+    private let workspaceNotifications: NotificationCenter
+    private var workspaceObservers: [NotificationCenter.ObservationToken] = []
+    private var lifecycle = Lifecycle.awake
+    private var sleepInterruption: Task<Void, Never>?
 
     convenience init() {
         let policy = RecognitionPolicy()
@@ -69,10 +65,12 @@ final class RecognitionRuntime {
         defaults: UserDefaults,
         registrar: any ShortcutRegistering,
         urlOpener: any TrackURLOpening,
+        workspaceNotifications: NotificationCenter = NSWorkspace.shared.notificationCenter,
         explainSystemAudio: @escaping @MainActor () async -> Bool,
         quit: @escaping @MainActor () -> Void
     ) {
         self.coordinator = coordinator
+        self.workspaceNotifications = workspaceNotifications
         let explanationKey = "explainedSystemAudio"
         let presentation = RecognitionPresentationModel(
             workflow: coordinator,
@@ -86,18 +84,62 @@ final class RecognitionRuntime {
         shortcuts = ShortcutSettingsModel(
             store: ShortcutSettingsStore(defaults: defaults),
             registrar: registrar,
-            onRecognize: { Task { await presentation.recognize() } }
+            onRecognize: { presentation.requestRecognition() }
         )
     }
 
     func start() {
+        guard lifecycle != .shuttingDown, workspaceObservers.isEmpty else { return }
+        let workspace = NSWorkspace.shared
+        workspaceObservers = [
+            workspaceNotifications.addObserver(of: workspace, for: NSWorkspace.WillSleepMessage.self) { [weak self] _ in
+                self?.willSleep()
+            },
+            workspaceNotifications.addObserver(of: workspace, for: NSWorkspace.DidWakeMessage.self) { [weak self] _ in
+                self?.didWake()
+            },
+        ]
         presentation.startObserving()
         shortcuts.start()
     }
 
     func shutdown() async {
+        lifecycle = .shuttingDown
+        setRecognitionSuspended(true)
+        for observer in workspaceObservers {
+            workspaceNotifications.removeObserver(observer)
+        }
+        workspaceObservers.removeAll()
         shortcuts.stop()
         await coordinator.shutdown()
+    }
+
+    private func willSleep() {
+        guard lifecycle == .awake else { return }
+        lifecycle = .sleeping
+        setRecognitionSuspended(true)
+        guard sleepInterruption == nil else { return }
+        sleepInterruption = Task { [weak self, coordinator] in
+            await coordinator.interrupt()
+            self?.sleepInterruption = nil
+            self?.resumeRecognitionIfReady()
+        }
+    }
+
+    private func didWake() {
+        guard lifecycle == .sleeping else { return }
+        lifecycle = .awake
+        resumeRecognitionIfReady()
+    }
+
+    private func resumeRecognitionIfReady() {
+        guard lifecycle == .awake, sleepInterruption == nil else { return }
+        setRecognitionSuspended(false)
+    }
+
+    private func setRecognitionSuspended(_ suspended: Bool) {
+        coordinator.setRecognitionSuspended(suspended)
+        presentation.setRecognitionSuspended(suspended)
     }
 
     private static func explainSystemAudio() async -> Bool {

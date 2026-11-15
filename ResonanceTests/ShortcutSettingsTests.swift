@@ -8,7 +8,7 @@ import Testing
 @MainActor
 struct ShortcutSettingsTests {
     private let first = GlobalShortcut(keyCode: UInt16(kVK_ANSI_R), modifiers: [.control, .option])
-    private let second = GlobalShortcut(keyCode: UInt16(kVK_ANSI_S), modifiers: [.command, .shift])
+    private let second = GlobalShortcut(keyCode: UInt16(kVK_ANSI_S), modifiers: [.command, .control])
 
     @Test func `Only a saved shortcut registers and one press dispatches one command`() throws {
         try withSettings { _, store, registrar in
@@ -71,6 +71,59 @@ struct ShortcutSettingsTests {
             #expect(model.isRegistered)
             #expect(registrar.registered == first)
             #expect(store.load() == first)
+        }
+    }
+
+    @Test(arguments: [kVK_ANSI_C, kVK_ANSI_Q])
+    func `Common app shortcuts stay unsaved until confirmed`(keyCode: Int) throws {
+        try withSettings { _, store, registrar in
+            let model = ShortcutSettingsModel(
+                store: store, registrar: registrar, keyboardSource: { nil }, onRecognize: {}
+            )
+            let common = GlobalShortcut(keyCode: UInt16(keyCode), modifiers: .command)
+            model.assign(first)
+            model.assign(common)
+
+            #expect(model.shortcutToConfirm == common)
+            #expect(model.configured == first)
+            #expect(registrar.registered == first)
+            #expect(store.load() == first)
+
+            model.dismissAssignmentWarning()
+            model.confirmAssignment(common)
+            #expect(model.shortcutToConfirm == nil)
+            #expect(registrar.registered == first)
+            #expect(store.load() == first)
+
+            model.assign(common)
+            model.confirmAssignment(common)
+            #expect(model.shortcutToConfirm == nil)
+            #expect(model.configured == common)
+            #expect(registrar.registered == common)
+            #expect(store.load() == common)
+        }
+    }
+
+    @Test func `The Dvorak Command mapping drives the picker and saved label`() throws {
+        try withSettings { _, store, registrar in
+            let sources = try #require(TISCreateInputSourceList(
+                [kTISPropertyInputSourceID as String: "com.apple.keylayout.DVORAK-QWERTYCMD"] as CFDictionary, true
+            )?.takeRetainedValue() as? [TISInputSource])
+            let source = try #require(sources.first)
+            let model = ShortcutSettingsModel(
+                store: store, registrar: registrar, keyboardSource: { source }, onRecognize: {}
+            )
+            let physicalR = UInt16(kVK_ANSI_R)
+            let commandR = GlobalShortcut(keyCode: physicalR, modifiers: .command)
+
+            #expect(model.keyLabels(for: []).first { $0.id == physicalR }?.label == "P")
+            #expect(model.keyLabels(for: [.option, .command]).first { $0.id == physicalR }?.label == "R")
+            #expect(model.label(for: commandR) == "⌘R")
+
+            try store.save(commandR)
+            model.start()
+            #expect(model.shortcutLabel == "⌘R")
+            #expect(registrar.registered?.keyCode == physicalR)
         }
     }
 
