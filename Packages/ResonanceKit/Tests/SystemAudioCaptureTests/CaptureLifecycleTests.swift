@@ -23,8 +23,10 @@ struct CaptureLifecycleTests {
         case .observeFormat: [.tap, .service, .dataSource, .output]
         case .readUID, .createAggregate: [.format, .tap, .service, .dataSource, .output]
         case .observeRate: [.aggregate, .format, .tap, .service, .dataSource, .output]
-        case .readFormat, .readBufferSize, .registerIO: [.rate, .aggregate, .format, .tap, .service, .dataSource, .output]
-        case .start: [.stop, .callback, .rate, .aggregate, .format, .tap, .service, .dataSource, .output]
+        case .observeAbnormalStop: [.rate, .aggregate, .format, .tap, .service, .dataSource, .output]
+        case .readFormat, .readBufferSize, .registerIO:
+            [.abnormalStop, .rate, .aggregate, .format, .tap, .service, .dataSource, .output]
+        case .start: FakeHAL.fullCleanup
         }
         #expect(hal.releases == cleanup)
     }
@@ -110,6 +112,61 @@ struct CaptureLifecycleTests {
         #expect(next.releases == FakeHAL.fullCleanup)
     }
 
+    @Test(.timeLimit(.minutes(1))) func `Variable callbacks can exceed the nominal frame count`() async throws {
+        let hal = FakeHAL(largestVariableBuffer: 513)
+        let capture = SystemAudioCaptureClient(policy: RecognitionPolicy(), hal: hal)
+        let stream = try await capture.start(attemptID: RecognitionAttemptID())
+        let ring = try #require(hal.ring)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: FakeHAL.makeFormat(), frameCapacity: 513))
+        let channels = try #require(buffer.floatChannelData)
+        var frames = stream.makeAsyncIterator()
+        var position: Int64 = 0
+
+        for count: AVAudioFrameCount in [512, 513, 512] {
+            buffer.frameLength = count
+            channels[0].update(repeating: 0.25, count: Int(count))
+            channels[1].update(repeating: 0.25, count: Int(count))
+            write(buffer, at: Double(position), into: ring)
+            let next = try await frames.next()
+            let frame = try #require(next)
+            #expect(frame.position == position)
+            #expect(frame.samples.count == Int(count))
+            position += Int64(count)
+        }
+
+        await capture.stop()
+        #expect(try await frames.next() == nil)
+        #expect(hal.releases == FakeHAL.fullCleanup)
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func `An abnormal device stop interrupts the stream and releases the capture`(afterFirstBuffer: Bool) async throws {
+        let hal = FakeHAL()
+        let capture = SystemAudioCaptureClient(policy: RecognitionPolicy(), hal: hal)
+        let stream = try await capture.start(attemptID: RecognitionAttemptID())
+        var frames = stream.makeAsyncIterator()
+        let notifyStopped = try #require(hal.abnormalStop)
+
+        if afterFirstBuffer {
+            let ring = try #require(hal.ring)
+            let buffer = try #require(AVAudioPCMBuffer(pcmFormat: FakeHAL.makeFormat(), frameCapacity: 512))
+            let channels = try #require(buffer.floatChannelData)
+            buffer.frameLength = 512
+            channels[0].update(repeating: 0.25, count: 512)
+            channels[1].update(repeating: 0.25, count: 512)
+            write(buffer, at: 0, into: ring)
+            let next = try await frames.next()
+            try #require(next != nil)
+        }
+
+        notifyStopped()
+        await #expect(throws: RecognitionFailure.captureInterrupted) { try await frames.next() }
+        await capture.stop()
+        #expect(hal.releases == FakeHAL.fullCleanup)
+        #expect(hal.abnormalStop == nil)
+        #expect(hal.ring == nil)
+    }
+
     @Test(.timeLimit(.minutes(1))) func `A slow consumer sees a bounded queue failure and cleanup`() async throws {
         let hal = FakeHAL()
         let capture = SystemAudioCaptureClient(policy: RecognitionPolicy(captureQueueCapacity: 1), hal: hal)
@@ -141,38 +198,49 @@ private final class StartGate: Sendable {
 private final class FakeHAL: CaptureHAL {
     enum Stage: String, CaseIterable {
         case observeOutput, observeDataSource, observeService, createTap, observeFormat, readUID, createAggregate
-        case observeRate, readFormat, readBufferSize, registerIO, start
+        case observeRate, observeAbnormalStop, readFormat, readBufferSize, registerIO, start
     }
 
     enum Release: Equatable {
-        case stop, callback, rate, aggregate, format, tap, service, dataSource, output
+        case stop, callback, abnormalStop, rate, aggregate, format, tap, service, dataSource, output
     }
 
-    static let fullCleanup: [Release] = [.stop, .callback, .rate, .aggregate, .format, .tap, .service, .dataSource, .output]
+    static let fullCleanup: [Release] = [
+        .stop, .callback, .abnormalStop, .rate, .aggregate, .format, .tap, .service, .dataSource, .output,
+    ]
 
     private struct Activity {
         var acquisitions: [Stage] = []
         var releases: [Release] = []
         var ring: AudioBufferRing?
         var outputChange: (@Sendable () -> Void)?
+        var abnormalStop: (@Sendable () -> Void)?
     }
 
     private let activity = Mutex(Activity())
     private let failingAt: Stage?
     private let status: OSStatus
     private let gate: StartGate?
+    private let largestVariableBuffer: UInt32?
     let didStop = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
 
-    init(failingAt: Stage? = nil, status: OSStatus = kAudioHardwareUnspecifiedError, startGate: StartGate? = nil) {
+    init(
+        failingAt: Stage? = nil,
+        status: OSStatus = kAudioHardwareUnspecifiedError,
+        startGate: StartGate? = nil,
+        largestVariableBuffer: UInt32? = nil
+    ) {
         self.failingAt = failingAt
         self.status = status
         self.gate = startGate
+        self.largestVariableBuffer = largestVariableBuffer
     }
 
     var acquisitions: [Stage] { activity.withLock { $0.acquisitions } }
     var releases: [Release] { activity.withLock { $0.releases } }
     var ring: AudioBufferRing? { activity.withLock { $0.ring } }
     var outputChange: (@Sendable () -> Void)? { activity.withLock { $0.outputChange } }
+    var abnormalStop: (@Sendable () -> Void)? { activity.withLock { $0.abnormalStop } }
 
     static func makeFormat() -> AVAudioFormat {
         AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
@@ -199,9 +267,9 @@ private final class FakeHAL: CaptureHAL {
         return 20
     }
 
-    func bufferSize(_ device: AudioObjectID) throws -> UInt32 {
+    func maximumCallbackFrames(_ device: AudioObjectID) throws -> UInt32 {
         try acquired(.readBufferSize)
-        return 512
+        return largestVariableBuffer ?? 512
     }
 
     func observe(_ property: CaptureProperty, change: @escaping @Sendable () -> Void) throws -> () -> Void {
@@ -225,6 +293,13 @@ private final class FakeHAL: CaptureHAL {
         case .aggregateSampleRate:
             try acquired(.observeRate)
             return { self.release(.rate) }
+        case .ioStoppedAbnormally:
+            try acquired(.observeAbnormalStop)
+            activity.withLock { $0.abnormalStop = change }
+            return {
+                self.release(.abnormalStop)
+                self.activity.withLock { $0.abnormalStop = nil }
+            }
         }
     }
 
