@@ -27,20 +27,28 @@ public actor FakeAudioCapture: AudioCaptureClient {
     }
 
     public func stop() {
-        guard stopCount == 0 else { return }
         stopCount += 1
+        guard stopCount == 1 else { return }
         end()
     }
 }
 
 public actor FakeRecognition: RecognitionClient {
     private let pipe = AsyncStream<RecognitionUpdate>.makeStream()
+    private let onSubmit: @Sendable (PCMFrame) -> Void
+    private let onFinishInput: @Sendable () -> Void
     public private(set) var attempts: [RecognitionAttemptID] = []
     public private(set) var frames: [PCMFrame] = []
     public private(set) var finishCount = 0
     public private(set) var stopCount = 0
 
-    public init() {}
+    public init(
+        onSubmit: @escaping @Sendable (PCMFrame) -> Void = { _ in },
+        onFinishInput: @escaping @Sendable () -> Void = {}
+    ) {
+        self.onSubmit = onSubmit
+        self.onFinishInput = onFinishInput
+    }
 
     public func start(attemptID: RecognitionAttemptID) throws -> AsyncStream<RecognitionUpdate> {
         guard stopCount == 0 else { throw CancellationError() }
@@ -51,6 +59,7 @@ public actor FakeRecognition: RecognitionClient {
     public func submit(_ frame: PCMFrame) {
         guard stopCount == 0 && finishCount == 0 else { return }
         frames.append(frame)
+        onSubmit(frame)
     }
 
     public func send(_ event: RecognitionUpdate) {
@@ -59,11 +68,12 @@ public actor FakeRecognition: RecognitionClient {
 
     public func finishInput() {
         finishCount += 1
+        onFinishInput()
     }
 
     public func stop() {
-        guard stopCount == 0 else { return }
         stopCount += 1
+        guard stopCount == 1 else { return }
         pipe.continuation.finish()
     }
 }
@@ -76,6 +86,7 @@ public actor ManualRecognitionClock: RecognitionClock {
 
     public private(set) var now: Duration = .zero
     private var sleepers: [UUID: Sleeper] = [:]
+    public var pendingSleepCount: Int { sleepers.count }
 
     public init() {}
 
