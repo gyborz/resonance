@@ -2,7 +2,11 @@
 
 ## Environment
 
-Use macOS 26 or later and Xcode 26 or later (Swift 6.2 minimum). The project targets macOS 26.0, uses Swift 6 concurrency checking, and has been built and tested locally on Apple silicon. The GitHub Actions workflow uses the Apple silicon [macos-26 runner image](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md). To reproduce its build and tests locally:
+Use Xcode 27 or later to open the JSON-based project configuration. Resonance targets macOS 26.0 and uses Swift 6 concurrency checking. [Xcode project format compatibility](https://developer.apple.com/documentation/xcode/updating-your-xcode-project-configuration-file-format)
+
+GitHub Actions builds and tests on macOS 27 using the Apple silicon Xcode 27 runner. [Runner image](https://github.com/actions/runner-images/blob/main/images/macos/xcode-27-arm64-Readme.md)
+
+Run the same checks locally with this command.
 
 ```sh
 scripts/check
