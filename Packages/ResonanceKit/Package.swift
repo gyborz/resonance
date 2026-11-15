@@ -8,12 +8,23 @@ let package = Package(
         .library(name: "RecognitionCore", targets: ["RecognitionCore"]),
         .library(name: "SystemAudioCapture", targets: ["SystemAudioCapture"]),
         .library(name: "RecognitionTestSupport", targets: ["RecognitionTestSupport"]),
+        .library(name: "ShazamRecognition", targets: ["ShazamRecognition"]),
     ],
     targets: [
         .target(name: "RecognitionCore"),
         .target(name: "CaptureRing"),
         .target(name: "SystemAudioCapture", dependencies: ["RecognitionCore", "CaptureRing"]),
         .testTarget(name: "SystemAudioCaptureTests", dependencies: ["SystemAudioCapture", "RecognitionCore"]),
+        .target(name: "ShazamRecognition", dependencies: ["RecognitionCore"]),
+        .target(
+            name: "ShazamFixtureSupport",
+            dependencies: ["RecognitionCore"],
+            path: "Tests/ShazamFixtureSupport"
+        ),
+        .testTarget(
+            name: "ShazamRecognitionTests",
+            dependencies: ["RecognitionCore", "ShazamRecognition", "ShazamFixtureSupport"]
+        ),
         .target(
             name: "RecognitionTestSupport",
             dependencies: ["RecognitionCore"],
