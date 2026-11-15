@@ -36,6 +36,21 @@ import Testing
     #expect(item.artworkURL == nil)
 }
 
+@Test func `Named matches take precedence over link-only and ID-only items`() throws {
+    let idOnly = SHMediaItem(properties: [.shazamID: "sparse", .title: " \n"])
+    let musicURL = try #require(URL(string: "https://music.apple.com/us/song/fixture"))
+    let linkOnly = SHMediaItem(properties: [.appleMusicURL: musicURL])
+    let named = SHMediaItem(properties: [.shazamID: "named", .title: "Song title", .artist: "Song artist"])
+    let later = SHMediaItem(properties: [.title: "Later result"])
+
+    let track = try #require(ShazamMetadata.firstTrack(in: [idOnly, linkOnly, named, later]))
+    #expect(track.id == "shazam:named")
+    #expect(track.title == "Song title")
+    #expect(track.artist == "Song artist")
+    #expect(ShazamMetadata.firstTrack(in: [idOnly, linkOnly])?.appleMusicURL == musicURL)
+    #expect(ShazamMetadata.firstTrack(in: [idOnly])?.id == "shazam:sparse")
+}
+
 @Test func `No-match and invalid fingerprint responses remain distinct from a service failure`() {
     let signatureInvalid = NSError(domain: SHError.errorDomain, code: SHError.Code.signatureInvalid.rawValue)
     #expect(ShazamMetadata.unmatchedResult(error: nil) == .noMatch)

@@ -1,11 +1,14 @@
 import RecognitionCore
 import ShazamFixtureSupport
+import ShazamKit
 import ShazamRecognition
 import Testing
 
-@Test func `A five-second excerpt matches the real custom catalog during capture`() async throws {
+@Test func `A five-second excerpt prefers named metadata in the real custom catalog`() async throws {
     let attempt = RecognitionAttemptID()
-    let client = ShazamRecognitionClient(customCatalogData: try ShazamFixture.catalogData())
+    let idOnly = SHMediaItem(properties: [.shazamID: "id-only"])
+    let catalog = try ShazamFixture.catalogData(leadingMediaItems: [idOnly])
+    let client = ShazamRecognitionClient(customCatalogData: catalog)
     let updates = try await client.start(attemptID: attempt)
 
     try await feedExcerpt(to: client, attempt: attempt, seconds: 5)
@@ -48,6 +51,23 @@ import Testing
     #expect(result.event == .noMatch(isFinal: true))
 }
 
+@Test func `The full signature matches music that starts after the early query`() async throws {
+    let attempt = RecognitionAttemptID()
+    let client = ShazamRecognitionClient(customCatalogData: try ShazamFixture.catalogData())
+    let updates = try await client.start(attemptID: attempt)
+
+    try await feedExcerpt(to: client, attempt: attempt, seconds: 5, variant: .unrelated)
+    try await feedExcerpt(to: client, attempt: attempt, seconds: 5, startingAt: 5)
+    await client.finishInput()
+    let result = try await terminalUpdate(from: updates)
+    await client.stop()
+
+    let track = try #require(match(in: result.event))
+    #expect(result.attemptID == attempt)
+    #expect(track.title == ShazamFixture.title)
+    #expect(track.artist == ShazamFixture.artist)
+}
+
 private func match(in event: RecognitionEvent) -> RecognizedTrack? {
     guard case let .match(track) = event else { return nil }
     return track
@@ -57,12 +77,13 @@ private func feedExcerpt(
     to client: ShazamRecognitionClient,
     attempt: RecognitionAttemptID,
     seconds: Int,
+    startingAt startSecond: Int = 0,
     variant: ShazamFixture.Variant = .reference
 ) async throws {
     let rate = Int(PCMFrame.sampleRate)
     let excerptStart = 2 * rate
     let bufferSize = rate / 10
-    for position in stride(from: 0, to: seconds * rate, by: bufferSize) {
+    for position in stride(from: startSecond * rate, to: (startSecond + seconds) * rate, by: bufferSize) {
         let start = excerptStart + position
         let samples = ShazamFixture.samples(in: start..<(start + bufferSize), variant: variant)
         try await client.submit(PCMFrame(attemptID: attempt, position: Int64(position), samples: samples))

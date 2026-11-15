@@ -75,6 +75,8 @@ final class ShazamMatchingSession: SignatureMatchingSession {
 
 enum ShazamMetadata {
     static func firstTrack(in items: [SHMediaItem], recognizedAt: Date = .now) -> RecognizedTrack? {
+        var artworkOrLink: RecognizedTrack?
+        var identifiedOnly: RecognizedTrack?
         for item in items {
             let title = text(item[.title])
             let artist = text(item[.artist])
@@ -84,7 +86,7 @@ enum ShazamMetadata {
             guard title != nil || artist != nil || appleMusicURL != nil || artworkURL != nil || identity != nil else {
                 continue
             }
-            return RecognizedTrack(
+            let track = RecognizedTrack(
                 id: identity ?? item.id.uuidString,
                 title: title,
                 artist: artist,
@@ -92,8 +94,16 @@ enum ShazamMetadata {
                 artworkURL: artworkURL,
                 recognizedAt: recognizedAt
             )
+            if title != nil || artist != nil {
+                return track
+            }
+            if appleMusicURL != nil || artworkURL != nil {
+                artworkOrLink = artworkOrLink ?? track
+            } else {
+                identifiedOnly = identifiedOnly ?? track
+            }
         }
-        return nil
+        return artworkOrLink ?? identifiedOnly
     }
 
     static func unmatchedResult(error: (any Error)?) -> SignatureMatch {

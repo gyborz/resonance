@@ -14,6 +14,7 @@ enum CaptureProperty {
     case serviceRestart
     case tapFormat(AudioObjectID)
     case aggregateSampleRate(AudioObjectID)
+    case ioStoppedAbnormally(AudioObjectID)
 }
 
 protocol CaptureHAL: Sendable {
@@ -21,7 +22,7 @@ protocol CaptureHAL: Sendable {
     func tapUID(_ tap: AudioObjectID) throws -> String
     func tapFormat(_ tap: AudioObjectID) throws -> AudioStreamBasicDescription
     func createAggregate(tapUID: String) throws -> AudioObjectID
-    func bufferSize(_ device: AudioObjectID) throws -> UInt32
+    func maximumCallbackFrames(_ device: AudioObjectID) throws -> UInt32
 
     func observe(
         _ property: CaptureProperty,
@@ -111,11 +112,17 @@ struct CoreAudioHAL: CaptureHAL {
         return device
     }
 
-    func bufferSize(_ device: AudioObjectID) throws -> UInt32 {
+    func maximumCallbackFrames(_ device: AudioObjectID) throws -> UInt32 {
         var frames: UInt32 = 0
         var size = UInt32(MemoryLayout.size(ofValue: frames))
-        var property = address(kAudioDevicePropertyBufferFrameSize)
-        try check("Read the device buffer size", AudioObjectGetPropertyData(device, &property, 0, nil, &size, &frames))
+        // When present, the variable-size property contains the maximum frame count.
+        var property = address(kAudioDevicePropertyUsesVariableBufferFrameSizes)
+        if !AudioObjectHasProperty(device, &property) {
+            property = address(kAudioDevicePropertyBufferFrameSize)
+        }
+        try check("Read the maximum callback frame count", AudioObjectGetPropertyData(
+            device, &property, 0, nil, &size, &frames
+        ))
         return frames
     }
 
@@ -147,6 +154,8 @@ struct CoreAudioHAL: CaptureHAL {
             (object, selector, scope) = (tap, kAudioTapPropertyFormat, kAudioObjectPropertyScopeGlobal)
         case .aggregateSampleRate(let device):
             (object, selector, scope) = (device, kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal)
+        case .ioStoppedAbnormally(let device):
+            (object, selector, scope) = (device, kAudioDevicePropertyIOStoppedAbnormally, kAudioObjectPropertyScopeGlobal)
         }
         let listener: AudioObjectPropertyListenerBlock = { _, _ in change() }
         var propertyAddress = address(selector, scope: scope)

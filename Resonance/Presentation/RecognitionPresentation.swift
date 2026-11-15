@@ -7,12 +7,19 @@ struct TrackPresentation {
     let artist: String
     let appleMusicURL: URL?
     let artworkURL: URL?
+    let openAppleMusic: (@MainActor () -> Void)?
 
-    init(_ track: RecognizedTrack) {
+    @MainActor
+    init(_ track: RecognizedTrack, urlOpener: any TrackURLOpening) {
         title = Self.cleaned(track.title) ?? String(localized: "Unknown song")
         artist = Self.cleaned(track.artist) ?? String(localized: "Unknown artist")
         appleMusicURL = Self.webURL(track.appleMusicURL)
         artworkURL = Self.webURL(track.artworkURL)
+        if let appleMusicURL {
+            openAppleMusic = { urlOpener.open(appleMusicURL) }
+        } else {
+            openAppleMusic = nil
+        }
     }
 
     private static func cleaned(_ text: String?) -> String? {
@@ -34,8 +41,14 @@ struct RecognitionStatusPresentation {
     let detail: LocalizedStringResource?
     let icon: String
 
-    init(_ state: RecognitionState) {
-        switch state {
+    init(_ snapshot: RecognitionSnapshot) {
+        if snapshot.hasQueuedRetry {
+            title = "Recognition queued"
+            detail = "Waiting for the previous audio capture to stop."
+            icon = "clock"
+            return
+        }
+        switch snapshot.state {
         case .idle:
             title = "Ready to recognize"
             detail = nil
@@ -127,10 +140,12 @@ final class RecognitionPresentationModel {
         observation?.cancel()
     }
 
-    var status: RecognitionStatusPresentation { RecognitionStatusPresentation(snapshot.state) }
-    var track: TrackPresentation? { snapshot.lastTrack.map(TrackPresentation.init) }
-    var canRecognize: Bool { !snapshot.state.isActive && !isExplaining }
-    var canCancel: Bool { snapshot.state.isActive }
+    var status: RecognitionStatusPresentation { RecognitionStatusPresentation(snapshot) }
+    var track: TrackPresentation? {
+        snapshot.lastTrack.map { TrackPresentation($0, urlOpener: urlOpener) }
+    }
+    var canRecognize: Bool { !snapshot.isActive && !isExplaining }
+    var canCancel: Bool { snapshot.isActive }
     var isLatestMatch: Bool {
         if case .matched = snapshot.state { return true }
         return false
@@ -172,11 +187,6 @@ final class RecognitionPresentationModel {
     func cancel() async {
         guard canCancel else { return }
         await workflow.cancel()
-    }
-
-    func openAppleMusic() {
-        guard let url = track?.appleMusicURL else { return }
-        urlOpener.open(url)
     }
 
     func openSettings(using action: @MainActor () -> Void) {

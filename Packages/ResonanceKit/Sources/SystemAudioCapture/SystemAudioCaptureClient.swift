@@ -42,26 +42,27 @@ public actor SystemAudioCaptureClient: AudioCaptureClient {
         invalidated = true
 
         let cleanup = CaptureCleanup()
-        let route = CaptureRouteSignal()
+        let interruption = CaptureInterruptionSignal()
         do {
             try Task.checkCancellation()
-            try observe(.defaultOutput, using: route, cleanup: cleanup)
-            try observe(.outputDataSource, using: route, cleanup: cleanup)
-            try observe(.serviceRestart, using: route, cleanup: cleanup)
+            try observe(.defaultOutput, using: interruption, cleanup: cleanup)
+            try observe(.outputDataSource, using: interruption, cleanup: cleanup)
+            try observe(.serviceRestart, using: interruption, cleanup: cleanup)
 
             let tap = try hal.createTap()
             cleanup.add { [hal] in hal.destroyTap(tap) }
             try Task.checkCancellation()
-            try observe(.tapFormat(tap), using: route, cleanup: cleanup)
+            try observe(.tapFormat(tap), using: interruption, cleanup: cleanup)
 
             let tapUID = try hal.tapUID(tap)
             let device = try hal.createAggregate(tapUID: tapUID)
             cleanup.add { [hal] in hal.destroyAggregate(device) }
             try Task.checkCancellation()
-            try observe(.aggregateSampleRate(device), using: route, cleanup: cleanup)
+            try observe(.aggregateSampleRate(device), using: interruption, cleanup: cleanup)
+            try observe(.ioStoppedAbnormally(device), using: interruption, cleanup: cleanup)
 
             var description = try hal.tapFormat(tap)
-            let frames = try hal.bufferSize(device)
+            let frames = try hal.maximumCallbackFrames(device)
             guard description.mFormatID == kAudioFormatLinearPCM,
                   description.mSampleRate.isFinite, description.mSampleRate > 0,
                   description.mChannelsPerFrame > 0, description.mBytesPerFrame > 0,
@@ -80,7 +81,7 @@ public actor SystemAudioCaptureClient: AudioCaptureClient {
             cleanup.add { [hal] in hal.stop(device, io: io) }
             try hal.start(device, io: io)
             try Task.checkCancellation()
-            guard !route.interrupted.load(ordering: .acquiring) else {
+            guard !interruption.interrupted.load(ordering: .acquiring) else {
                 throw RecognitionFailure.captureInterrupted
             }
 
@@ -91,7 +92,7 @@ public actor SystemAudioCaptureClient: AudioCaptureClient {
                 }
             }
             capture = RunningCapture(
-                cleanup: cleanup, route: route, ring: ring, buffer: buffer,
+                cleanup: cleanup, interruption: interruption, ring: ring, buffer: buffer,
                 normalizer: normalizer, continuation: pipe.continuation
             )
             if diagnosticsEnabled {
@@ -126,11 +127,11 @@ public actor SystemAudioCaptureClient: AudioCaptureClient {
 
     private func observe(
         _ property: CaptureProperty,
-        using route: CaptureRouteSignal,
+        using interruption: CaptureInterruptionSignal,
         cleanup: CaptureCleanup
     ) throws {
         cleanup.add(try hal.observe(property) {
-            route.interrupted.store(true, ordering: .releasing)
+            interruption.interrupted.store(true, ordering: .releasing)
         })
     }
 
@@ -139,7 +140,7 @@ public actor SystemAudioCaptureClient: AudioCaptureClient {
         do {
             // Bound each drain so cancellation/stop can always run on this executor.
             for _ in 0..<policy.captureQueueCapacity {
-                guard !capture.route.interrupted.load(ordering: .acquiring) else {
+                guard !capture.interruption.interrupted.load(ordering: .acquiring) else {
                     throw RecognitionFailure.captureInterrupted
                 }
                 guard try capture.ring.copyNext(into: capture.buffer) else { break }
@@ -174,13 +175,13 @@ public actor SystemAudioCaptureClient: AudioCaptureClient {
     }
 }
 
-private final class CaptureRouteSignal: Sendable {
+private final class CaptureInterruptionSignal: Sendable {
     let interrupted = Atomic(false)
 }
 
 private struct RunningCapture {
     let cleanup: CaptureCleanup
-    let route: CaptureRouteSignal
+    let interruption: CaptureInterruptionSignal
     let ring: AudioBufferRing
     let buffer: AVAudioPCMBuffer
     let normalizer: PCMNormalizer

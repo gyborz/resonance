@@ -64,10 +64,19 @@ public enum RecognitionState: Equatable, Sendable {
 public struct RecognitionSnapshot: Equatable, Sendable {
     public let state: RecognitionState
     public let lastTrack: RecognizedTrack?
+    /// A new request is waiting for the cancelled attempt to release its capture.
+    public let hasQueuedRetry: Bool
 
-    public init(state: RecognitionState = .idle, lastTrack: RecognizedTrack? = nil) {
+    public var isActive: Bool { state.isActive || hasQueuedRetry }
+
+    public init(
+        state: RecognitionState = .idle,
+        lastTrack: RecognizedTrack? = nil,
+        hasQueuedRetry: Bool = false
+    ) {
         self.state = state
         self.lastTrack = lastTrack
+        self.hasQueuedRetry = hasQueuedRetry
     }
 }
 
