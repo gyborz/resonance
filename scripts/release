@@ -1,0 +1,110 @@
+#!/bin/bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+usage() {
+    cat <<'USAGE'
+Usage: scripts/release [build|notarize]
+
+Set RESONANCE_RELEASE_TEAM to your Apple Developer team and
+RESONANCE_RELEASE_BUNDLE_ID to your registered App ID. Install a valid
+Developer ID Application identity in the login or build keychain.
+
+The notarize command also requires RESONANCE_NOTARY_PROFILE, a notarytool
+Keychain profile. It builds, notarizes, and verifies dist/Resonance.zip.
+The build command verifies the signed app and exports it to dist/Resonance.app.
+USAGE
+}
+
+fail() {
+    printf 'Resonance release: %s\n' "$*" >&2
+    exit 1
+}
+
+case "${1:-}" in
+    build|notarize) action="$1" ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+esac
+
+[[ "$#" == 1 ]] || fail "Expected one command."
+[[ "${RESONANCE_RELEASE_TEAM:-}" =~ ^[A-Z0-9]{10}$ ]] ||
+    fail "Set RESONANCE_RELEASE_TEAM to your Apple Developer team ID."
+[[ "${RESONANCE_RELEASE_BUNDLE_ID:-}" =~ ^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$ &&
+   "$RESONANCE_RELEASE_BUNDLE_ID" != local.resonance.development ]] ||
+    fail "Set RESONANCE_RELEASE_BUNDLE_ID to your registered App ID."
+
+if [[ "$action" == notarize ]]; then
+    [[ -n "${RESONANCE_NOTARY_PROFILE:-}" ]] ||
+        fail "Set RESONANCE_NOTARY_PROFILE to your notarytool Keychain profile."
+fi
+
+if ! security find-identity -v -p codesigning |
+    awk 'index($0, "Developer ID Application:") { found=1 } END { exit !found }'; then
+    fail "Install a valid Developer ID Application identity."
+fi
+
+mkdir -p dist
+scratch="$(mktemp -d "$PWD/dist/.resonance-release.XXXXXX")"
+trap 'rm -rf "$scratch"' EXIT
+
+archive="$scratch/Resonance.xcarchive"
+xcodebuild -project Resonance.xcodeproj -scheme Resonance -configuration Release \
+    -destination 'generic/platform=macOS' -derivedDataPath "$scratch/DerivedData" \
+    -archivePath "$archive" ARCHS=arm64 CODE_SIGN_STYLE=Manual \
+    CODE_SIGN_IDENTITY="Developer ID Application" DEVELOPMENT_TEAM="$RESONANCE_RELEASE_TEAM" \
+    RESONANCE_BUNDLE_IDENTIFIER="$RESONANCE_RELEASE_BUNDLE_ID" archive
+
+options="$scratch/ExportOptions.plist"
+plutil -create xml1 "$options"
+plutil -insert method -string developer-id "$options"
+plutil -insert signingStyle -string manual "$options"
+plutil -insert signingCertificate -string "Developer ID Application" "$options"
+plutil -insert teamID -string "$RESONANCE_RELEASE_TEAM" "$options"
+xcodebuild -exportArchive -archivePath "$archive" -exportOptionsPlist "$options" \
+    -exportPath "$scratch/export"
+
+app="$scratch/export/Resonance.app"
+verify_signature() {
+    local bundle="$1"
+    codesign --verify --deep --strict "$bundle"
+    local details
+    details="$(codesign -dvv "$bundle" 2>&1)"
+    [[ "$details" == *"Authority=Developer ID Application:"* ]] ||
+        fail "The app is missing a Developer ID Application signature."
+    [[ "$details" == *"TeamIdentifier=$RESONANCE_RELEASE_TEAM"* ]] ||
+        fail "The app is signed for a different team."
+    [[ "$details" == *"(runtime)"* ]] ||
+        fail "The app is missing Hardened Runtime."
+}
+verify_signature "$app"
+
+if [[ "$action" == build ]]; then
+    [[ ! -e dist/Resonance.app ]] || fail "Move the previous dist/Resonance.app before exporting."
+    mv "$app" dist/Resonance.app
+    printf 'Developer ID signature verified for dist/Resonance.app.\n'
+    exit 0
+fi
+
+submission="$scratch/submission.zip"
+ditto -c -k --keepParent "$app" "$submission"
+receipt="$scratch/receipt.plist"
+xcrun notarytool submit "$submission" --keychain-profile "$RESONANCE_NOTARY_PROFILE" \
+    --wait --timeout 30m --output-format plist > "$receipt"
+status="$(plutil -extract status raw "$receipt")"
+if [[ "$status" != Accepted ]]; then
+    id="$(plutil -extract id raw "$receipt")"
+    fail "Notarization status: $status. Inspect the log for submission $id."
+fi
+
+xcrun stapler staple "$app"
+final_zip="$scratch/Resonance.zip"
+ditto -c -k --keepParent "$app" "$final_zip"
+
+ditto -x -k "$final_zip" "$scratch/install"
+installed_app="$scratch/install/Resonance.app"
+verify_signature "$installed_app"
+xcrun stapler validate "$installed_app"
+syspolicy_check distribution "$installed_app"
+mv -f "$final_zip" dist/Resonance.zip
+printf 'Notarized download verified at dist/Resonance.zip.\n'

@@ -1,16 +1,21 @@
 # Resonance
 
-Resonance is a native macOS menu bar app for identifying music playing on the Mac. It requires macOS 26 or later.
+Resonance is a macOS menu bar app that identifies music playing in other apps. It uses the system audio mix, so you can keep listening in Chrome, Safari, or a local player while it works.
+
+## Use Resonance
+
+1. Play a song in another app.
+2. Open Resonance in the menu bar and choose **Recognize Song**. On first use, continue through the explanation and allow system audio recording when macOS prompts you.
+3. After a match, the popover shows the title and artist. Choose **Open in Apple Music** if Shazam returns a link.
+
+In **Settings**, you can assign a global shortcut to recognize music while another app is active. Press **Cancel** to end an active request. Closing the popover leaves the request running.
 
 ## Build and test
 
-Open `Resonance.xcodeproj` with Xcode 26 or newer and select the **Resonance** scheme. The default test plan runs without system audio permission or an Apple Developer account. From the repository root, run `scripts/check` to run package tests, build the app, and run the deterministic Xcode plan.
+Build with Xcode 26 or later on macOS 26 or later. Open `Resonance.xcodeproj`, select **Resonance**, and choose **Run**. The default development configuration builds with a local bundle identifier. Configure a registered App ID and signing identity to use the default Shazam catalog.
 
-For account-backed testing, copy `Resonance/Configuration/Local.example.xcconfig` to `Local.xcconfig` in the same directory. Set your development team and registered bundle identifier. Enable the [ShazamKit App Service](https://developer.apple.com/help/account/services/shazamkit/) for that App ID before testing the default Shazam catalog.
+Run `scripts/check` for package tests, the Xcode app build, and app-hosted deterministic tests. See the [contributor guide](CONTRIBUTING.md) for signing setup and optional live tests, and the [validation record](docs/validation.md) for results.
 
-The opt-in `Live` test plan uses an app host with the configured bundle identity:
+## Privacy
 
-```sh
-xcodebuild -project Resonance.xcodeproj -scheme Resonance \
-  -testPlan Live -destination 'platform=macOS' -derivedDataPath DerivedData test
-```
+Resonance captures system audio when you start a recognition attempt. It discards raw audio after the attempt and keeps the last match only for the current launch. The public catalog uses Apple's Shazam service, which receives an audio signature for matching. Resonance has no custom backend and stores no recordings. Artwork links may be loaded when the result is displayed. [ShazamKit](https://developer.apple.com/shazamkit/)

@@ -6,14 +6,16 @@ Local checks ran on November 15, 2026, on Apple silicon with macOS 27.2 (26B123)
 | --- | --- |
 | Swift package tests | Passed. Covers capture ownership and rollback with simulated HAL, six input formats with AVAudioConverter, workflow deadlines and cancellation, and real offline ShazamKit match and no-match. |
 | App-hosted deterministic tests | Passed. Includes a generated stereo 44.1 kHz fixture through the real converter, real local Shazam catalog, workflow, and presentation. Also covers shortcut settings, errors, deadlines, cancellation, retry, and shutdown. |
+| GitHub Actions | The documented check passed on the hosted macOS 26 Apple silicon runner. [CI run](https://github.com/gyborz/resonance/actions/runs/43709340225) |
+| Unsigned Release build | Passed with `CODE_SIGNING_ALLOWED=NO` on local Apple silicon. |
 | Release archive | Built for arm64 and passed strict local code-signature verification. The code signature has Hardened Runtime enabled and uses ad-hoc signing. |
-| Launch outside Xcode | The standalone GUI launch check timed out before the menu bar could be inspected. |
+| Launch outside Xcode | The archived app launched as a standalone process. The GUI inspection timed out before the menu bar could be checked. |
 | Live test plan | Both hardware cases compile and enumerate. The runner refused to start without the local signed-host configuration. |
 | Developer ID archive, notarization, stapling, and ZIP installation | Pending a configured Apple Developer team, Developer ID Application identity, and Notary Service credentials. |
 
 ## Manual and live matrix
 
-These cases are pending on a signed interactive Mac. Configure the signing identity and App ID in `Local.xcconfig` and run `scripts/check-live system` or `scripts/check-live catalog`.
+These cases are pending on a signed interactive Mac. See the [contributor guide](../CONTRIBUTING.md) for signing setup and live test commands.
 
 | Case | Evidence to record | Status |
 | --- | --- | --- |
